@@ -39,13 +39,25 @@ export default function App() {
     },
   });
 
-  async function fetchValuesFromApi(fromCurrency) {
+  async function fetchCryptoValueFromApi(fromCurrency) {
     const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${fromCurrency}&to_currency=EUR&apikey=${process.env.NEXT_PUBLIC_ALPHAVANTAGE}`;
     try {
       const response = await fetch(url);
       const data = await response.json();
       const content = data?.["Realtime Currency Exchange Rate"];
       console.log("API", content?.["1. From_Currency Code"], "to", content?.["3. To_Currency Code"], content?.["5. Exchange Rate"]);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  async function fetchStockValueFromApi(symbol) {
+    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${process.env.NEXT_PUBLIC_ALPHAVANTAGE}`;
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+      const content = data?.["Global Quote"];
+      console.log("API", content?.["01. symbol"], content?.["05. price"]);
     } catch (error) {
       console.error(error);
     }
@@ -58,9 +70,8 @@ export default function App() {
       return;
     }
     setAssets(user.assets);
-    fetchValuesFromApi("BTC");
-    fetchValuesFromApi("ETH");
-    fetchValuesFromApi("SOL");
+    fetchCryptoValueFromApi("BTC");
+    fetchStockValueFromApi("IBM");
   }, [user]);
 
   function handleFormSubmit(event) {
