@@ -1,69 +1,18 @@
 import PropTypes from "prop-types";
-import { useFormStore, useCurrentAsset } from "../../../state";
-// import "./Form.css";
 import styles from "./Form.module.css";
 import { useState, useEffect } from "react";
 
 export default function Form({ onFormSubmit, resetForm }) {
-  const currentAsset = useCurrentAsset();
   const [selectedType, setSelectedType] = useState("");
-  const formIsVisible = useFormStore((state) => state.formIsVisible);
-
-  useEffect(() => {
-    if (currentAsset && currentAsset.type) {
-      setSelectedType(currentAsset.type);
-    } else {
-      setSelectedType("");
-    }
-  }, [currentAsset, formIsVisible]);
 
   const handleChange = (event) => {
     setSelectedType(event.target.value);
   };
 
-  console.log(currentAsset);
-
   return (
-    <div className={`assetFormContainer layoutElement ${formIsVisible || "hidden"}`}>
-      <h2>{useCurrentAsset()?.id ? "Edit asset" : "Add asset"}</h2>
+    <div className={`assetFormContainer`}>
+      <h2>Edit asset</h2>
       <form id="form" onSubmit={onFormSubmit}>
-        {/* <select id="assetTypeList">
-            <option value="Crypto" />
-            <option value="Stocks" />
-            <option value="Metals" />
-          </select>
-          <select id="Metals">
-            <option value="Aluminum" />
-            <option value="Cobalt" />
-            <option value="Copper" />
-            <option value="Gold" />
-            <option value="Nickel" />
-            <option value="Palladium" />
-            <option value="Platinum" />
-            <option value="Ruthenium" />
-            <option value="Silver" />
-            <option value="Zinc" />
-          </select>
-          <select id="Stocks">
-            <option value="Apple" />
-            <option value="Meta" />
-            <option value="Alphabet" />
-            <option value="Amazon" />
-          </select>
-          <select id="Crypto">
-            <option value="Bitcoin" />
-            <option value="Bitcoin Cash" />
-            <option value="Cardano" />
-            <option value="ChainLink" />
-            <option value="Ethereum" />
-            <option value="Dogecoin" />
-            <option value="Litecoin" />
-            <option value="Ripple" />
-            <option value="Solana" />
-            <option value="Stellar" />
-            <option value="Uniswap" />
-          </select> */}
-
         <div className="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
           <label className="mdl-textfield__label" htmlFor="assetTypeField">
             Type
@@ -89,15 +38,7 @@ export default function Form({ onFormSubmit, resetForm }) {
           <label className="mdl-textfield__label" htmlFor="assetNameField">
             Asset
           </label>
-          <input
-            className="mdl-textfield__input"
-            type="text"
-            id="assetNameField"
-            autoComplete="off"
-            name="name"
-            required
-            defaultValue={useCurrentAsset()?.name}
-          />
+          <input className="mdl-textfield__input" type="text" id="assetNameField" autoComplete="off" name="name" required />
         </div>
         <div className="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
           <label className="mdl-textfield__label" htmlFor="assetQuantityField" id="assetQuantityLabel">
@@ -110,7 +51,6 @@ export default function Form({ onFormSubmit, resetForm }) {
             id="assetQuantityField"
             autoComplete="off"
             name="quantity"
-            defaultValue={useCurrentAsset()?.quantity}
           />
           <span className="mdl-textfield__error">Input is not a number!</span>
           <span id="assetUnitField"></span>
@@ -119,16 +59,9 @@ export default function Form({ onFormSubmit, resetForm }) {
           <label className="mdl-textfield__label" htmlFor="assetNotesField">
             Notes
           </label>
-          <input
-            className="mdl-textfield__input"
-            type="text"
-            id="assetNotesField"
-            autoComplete="off"
-            name="notes"
-            defaultValue={useCurrentAsset()?.notes}
-          />
+          <input className="mdl-textfield__input" type="text" id="assetNotesField" autoComplete="off" name="notes" />
         </div>
-        <input type="text" id="assetIdField" name="id" hidden defaultValue={useCurrentAsset()?._id} />
+        <input type="text" id="assetIdField" name="id" hidden defaultValue={"useCurrentAsset()?._id"} />
         <button className="mdl-button mdl-js-button mdl-button--raised mdl-button--accent" id="saveButton">
           Save
         </button>

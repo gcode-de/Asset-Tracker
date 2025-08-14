@@ -1,36 +1,43 @@
-import Asset from "@/components/Asset";
+import AssetList from "@/components/AssetList";
 import AssetControls from "@/components/AssetControls";
 import Filters from "@/components/Filters";
 import Form from "@/components/Form";
 import SnackBar from "@/components/SnackBar";
 import Footer from "@/components/Footer";
 import TotalValue from "@/components/TotalValue";
-import { useAssetStore, useCurrentAsset, useFormStore, useVisibleUserAssets } from "@/../state.js";
 import Login from "@/components/Login";
 import useSWR from "swr";
 import axios from "axios";
 import { GOOGLE_FONT_PROVIDER } from "next/dist/shared/lib/constants";
+import { useEffect, useState } from "react";
 
 export default function App() {
-  const setFormIsVisible = useFormStore((state) => state.setFormIsVisible);
-  const setCurrentAssetId = useFormStore((state) => state.setCurrentAssetId);
-  const userAssets = useAssetStore((state) => state.userAssets);
-  // const currentAssetId = useFormStore((state) => state.currentAssetId);
-  const deleteAsset = useAssetStore((state) => state.handleDeleteAsset);
-  const unDeleteAsset = useAssetStore((state) => state.handleUnDeleteAsset);
-  const addAsset = useAssetStore((state) => state.handleAddAsset);
-  const editAsset = useAssetStore((state) => state.handleEditAsset);
+  const initialAssets = [
+    { id: 0, name: "Bitcoin", quantity: 0.01288, notes: "", type: "crypto", abb: "btc", value: 10_000, baseValue: 40_000, isDeleted: false },
+    { id: 1, name: "Ethereum", quantity: 0.029, notes: "", type: "crypto", abb: "eth", value: 10_000, baseValue: 4_000, isDeleted: false },
+    { id: 2, name: "Silver", quantity: 754, notes: "", type: "metals", abb: "silver", value: 10_000, baseValue: 20.7, isDeleted: false },
+    {
+      id: 3,
+      name: "Gold",
+      quantity: 3.5,
+      notes: "recently bought",
+      type: "metals",
+      abb: "gold",
+      value: 10_000,
+      baseValue: 1_900,
+      isDeleted: false,
+    },
+    { id: 4, name: "Euro", quantity: 200, notes: "under the Pillow", type: "cash", abb: "eur", value: 200, baseValue: 1, isDeleted: false },
+    { id: 5, name: "Beach house", quantity: 1, notes: "I wish", type: "real_estate", abb: "RE", value: 1, baseValue: 1, isDeleted: false },
+  ];
+  const [assets, setAssets] = useState(initialAssets);
 
   const apiClient = axios.create({
-    baseURL: "/api", // Passen Sie dies an die Basis-URL Ihrer API an
+    baseURL: "/api",
     headers: {
       "Content-Type": "application/json",
     },
   });
-
-  // useEffect(() => {
-  //   console.log(userAssets);
-  // }, [userAssets]);
 
   async function fetchValuesFromApi() {
     // const url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=AAPL&apikey=Z1EVIMF28V618X3D";
@@ -49,7 +56,14 @@ export default function App() {
 
   const { data: user, isLoading, error, mutate } = useSWR("/api/user");
 
-  // console.log(user);
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    setAssets(user.assets);
+  }, [user]);
+
+  console.log(user);
 
   function handleFormSubmit(event) {
     event.preventDefault();
@@ -184,21 +198,15 @@ export default function App() {
         <h1>Track your assets!</h1>
         <Form onFormSubmit={handleFormSubmit} resetForm={resetForm} />
         <div id="assetControls" className="layoutElement">
-          <AssetControls handleUpdateValues={fetchValuesFromApi} />
-          <Filters />
+          <AssetControls />
         </div>
-        {/* <div id="asset-list" className="layoutElement">
-          {useVisibleUserAssets().map((asset) => (
-            <Asset key={asset.id} asset={asset} handleDeleteAsset={handleDeleteAsset} handleEditAsset={handleEditAsset} />
-          ))}
-        </div> */}
-        <div id="asset-list" className="layoutElement">
-          {user.assets.map((asset) => (
-            <Asset key={asset._id} asset={asset} handleDeleteAsset={handleDeleteAsset} handleEditAsset={handleEditAsset} />
-          ))}
-        </div>
+        {assets ? (
+          <AssetList assets={assets} handleDeleteAsset={handleDeleteAsset} handleEditAsset={handleEditAsset}></AssetList>
+        ) : (
+          "Please add assets!"
+        )}
         <Footer>
-          <TotalValue />
+          <TotalValue value={assets.reduce((sum, asset) => sum + asset.value, 0)} />
         </Footer>
         <SnackBar />
       </div>

@@ -1,17 +1,16 @@
 // import styles from "./Asset.module.css";
 import PropTypes from "prop-types";
-import { useAssetStore } from "../../../state.js";
 export default function Asset({ asset, handleEditAsset, handleDeleteAsset }) {
-  const assetUnits = useAssetStore((state) => state.assetUnits);
   return (
     <div className={`demo-card-square mdl-card mdl-shadow--2dp ${asset.type}`} id={asset._id}>
       <div className="mdl-card__title mdl-card--expand">
         <h2 className="mdl-card__title-text">{asset.name}</h2>
       </div>
       <div className="mdl-card__supporting-text">
-        {asset.quantity} {assetUnits[asset.type]}
+        {asset.quantity}
         <br />
-        Value: {(asset.baseValue * asset.quantity)?.toLocaleString("de-DE")}€ ({asset.baseValue?.toLocaleString("de-DE")}€/{assetUnits[asset.type]})
+        {/* Value: {(asset.baseValue * asset.quantity)?.toLocaleString("de-DE")}€ ({asset.baseValue?.toLocaleString("de-DE")}€) */}
+        Value: {asset.value?.toLocaleString("de-DE")}€ ({asset.baseValue?.toLocaleString("de-DE")}€)
         <br />
         Notes: {asset.notes}
       </div>

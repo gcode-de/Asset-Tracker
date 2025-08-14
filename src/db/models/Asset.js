@@ -2,18 +2,19 @@ import mongoose from "mongoose";
 const { Schema } = mongoose;
 
 const assetSchema = new Schema({
+  id: String,
   name: String,
   quantity: Number,
   notes: String,
-  type: String,
-  abb: String,
-  value: Number,
-  baseValue: Number,
-  isDeleted: { type: Boolean, default: false },
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
-  },
+  // type: String,
+  // abb: String,
+  // value: Number,
+  // baseValue: Number,
+  // isDeleted: { type: Boolean, default: false },
+  // user: {
+  //   type: mongoose.Schema.Types.ObjectId,
+  //   ref: "User",
+  // },
 });
 
 assetSchema.methods.softDelete = function () {
@@ -28,4 +29,4 @@ assetSchema.methods.softUndelete = function () {
 
 const Asset = mongoose.models.Asset || mongoose.model("Asset", assetSchema);
 
-module.exports = Asset;
+export default Asset;

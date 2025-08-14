@@ -1,4 +1,10 @@
-import { useTotalValue } from "../../../state.js";
-export default function TotalValue() {
-  return <>Total Worth: {useTotalValue()} €</>;
+export default function TotalValue({ value }) {
+  const formatCurrency = (val) => {
+    return new Intl.NumberFormat("de-DE", {
+      style: "currency",
+      currency: "EUR",
+    }).format(val);
+  };
+
+  return <>Total Worth: {formatCurrency(value)}</>;
 }
