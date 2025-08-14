@@ -39,19 +39,16 @@ export default function App() {
     },
   });
 
-  async function fetchValuesFromApi() {
-    // const url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=AAPL&apikey=Z1EVIMF28V618X3D";
-    // const url = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=XAU&apikey=Z1EVIMF28V618X3D";
-    // const url = "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=EUR&apikey=Z1EVIMF28V618X3D";
-    // const url = "https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAG&to_currency=EUR&apikey=Z1EVIMF28V618X3D";
-    // const url = "https://api.finage.co.uk/last/crypto/BTCUSD?apikey=API_KEYaeV4TA7IC5L7II8MLR5M3EHH4VID5RMA";
-    // try {
-    //   const response = await fetch(url, { mode: "no-cors" });
-    //   const data = await response.json();
-    //   console.log(data);
-    // } catch (error) {
-    //   console.error(error);
-    // }
+  async function fetchValuesFromApi(fromCurrency) {
+    const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${fromCurrency}&to_currency=EUR&apikey=${process.env.NEXT_PUBLIC_ALPHAVANTAGE}`;
+    try {
+      const response = await fetch(url);
+      const data = await response.json();
+      const content = data?.["Realtime Currency Exchange Rate"];
+      console.log("API", content?.["1. From_Currency Code"], "to", content?.["3. To_Currency Code"], content?.["5. Exchange Rate"]);
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   const { data: user, isLoading, error, mutate } = useSWR("/api/user");
@@ -61,9 +58,10 @@ export default function App() {
       return;
     }
     setAssets(user.assets);
+    fetchValuesFromApi("BTC");
+    fetchValuesFromApi("ETH");
+    fetchValuesFromApi("SOL");
   }, [user]);
-
-  console.log(user);
 
   function handleFormSubmit(event) {
     event.preventDefault();
