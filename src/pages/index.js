@@ -10,6 +10,7 @@ import useSWR from "swr";
 import axios from "axios";
 import { GOOGLE_FONT_PROVIDER } from "next/dist/shared/lib/constants";
 import { useEffect, useState } from "react";
+import Prices from "@/components/Prices";
 
 export default function App() {
   const initialAssets = [
@@ -70,8 +71,11 @@ export default function App() {
       return;
     }
     setAssets(user.assets);
-    fetchCryptoValueFromApi("BTC");
-    fetchStockValueFromApi("IBM");
+    // fetchCryptoValueFromApi("BTC");
+    // fetchCryptoValueFromApi("ETH");
+    // fetchCryptoValueFromApi("SOL");
+    // fetchCryptoValueFromApi("SHIB");
+    fetchStockValueFromApi("4GLD.DE");
   }, [user]);
 
   function handleFormSubmit(event) {
@@ -205,6 +209,7 @@ export default function App() {
       <div id="wrapper">
         <Login />
         <h1>Track your assets!</h1>
+        <Prices />
         <Form onFormSubmit={handleFormSubmit} resetForm={resetForm} />
         <div id="assetControls" className="layoutElement">
           <AssetControls />
