@@ -8,16 +8,20 @@ import dbConnect from "@/db/connect";
 import User from "@/db/models/User";
 import Asset from "@/db/models/Asset";
 import { cleanAssets } from "../../../../defaultAssets";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
 
 export default async function handler(request, response) {
   await dbConnect();
 
   const { method } = request;
   const { action } = request.query;
+  const session = await getServerSession(request, response, authOptions);
+  const userEmail = session?.user.email;
 
   switch (method) {
     case "GET":
-      const userWithAssets = await User.findById("65d89f5846848f9939128fe0");
+      const userWithAssets = await User.findOne({ email: userEmail || "null" });
       return response.status(200).json(userWithAssets);
 
     case "POST":

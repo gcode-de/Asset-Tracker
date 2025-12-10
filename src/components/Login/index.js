@@ -12,7 +12,7 @@ export default function Login() {
   }
   return (
     <>
-      Gastbenutzer <br />
+      Gast - bitte einloggen! <br />
       <button onClick={() => signIn()}>Sign in</button>
     </>
   );
