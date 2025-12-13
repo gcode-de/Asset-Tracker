@@ -1,4 +1,3 @@
-import PropTypes from "prop-types";
 import { Button } from "@/components/ui/button.jsx";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu.jsx";
 import { Plus, RefreshCcw } from "lucide-react";
@@ -54,8 +53,3 @@ export default function AssetControls({ handleUpdateValues, onAdd }) {
     </div>
   );
 }
-
-AssetControls.propTypes = {
-  handleUpdateValues: PropTypes.func.isRequired,
-  onAdd: PropTypes.func,
-};

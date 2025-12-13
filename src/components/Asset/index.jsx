@@ -1,5 +1,3 @@
-// import styles from "./Asset.module.css";
-import PropTypes from "prop-types";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import { Badge } from "@/components/ui/badge.jsx";
@@ -66,10 +64,3 @@ export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handl
     </Card>
   );
 }
-
-Asset.propTypes = {
-  asset: PropTypes.object.isRequired,
-  handleEditAsset: PropTypes.func.isRequired,
-  handleDeleteAsset: PropTypes.func.isRequired,
-  handleUnDeleteAsset: PropTypes.func,
-};

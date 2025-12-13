@@ -1,4 +1,3 @@
-import PropTypes from "prop-types";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button.jsx";
 import { Input } from "@/components/ui/input.jsx";
@@ -107,10 +106,3 @@ export default function Form({ onFormSubmit, resetForm, formId = "form", hideAct
     </div>
   );
 }
-
-Form.propTypes = {
-  resetForm: PropTypes.func.isRequired,
-  onFormSubmit: PropTypes.func.isRequired,
-  formId: PropTypes.string,
-  hideActions: PropTypes.bool,
-};
