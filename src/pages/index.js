@@ -1,18 +1,18 @@
 import AssetList from "@/components/AssetList";
 import AssetControls from "@/components/AssetControls";
 import Filters from "@/components/Filters";
-import Form from "@/components/Form";
 import SnackBar from "@/components/SnackBar";
 import Footer from "@/components/Footer";
 import TotalValue from "@/components/TotalValue";
 import Login from "@/components/Login";
 import useSWR from "swr";
 import axios from "axios";
-import { GOOGLE_FONT_PROVIDER } from "next/dist/shared/lib/constants";
 import { useEffect, useState } from "react";
-import Prices from "@/components/Prices";
+import { useToast } from "@/hooks/use-toast.js";
+import AssetDialog from "@/components/AssetDialog";
 
 export default function App() {
+  const { toast } = useToast();
   const initialAssets = [
     { id: 0, name: "Bitcoin", quantity: 0.01288, notes: "", type: "crypto", abb: "btc", value: 10_000, baseValue: 40_000, isDeleted: false },
     { id: 1, name: "Ethereum", quantity: 0.029, notes: "", type: "crypto", abb: "eth", value: 10_000, baseValue: 4_000, isDeleted: false },
@@ -32,6 +32,10 @@ export default function App() {
     { id: 5, name: "Beach house", quantity: 1, notes: "I wish", type: "real_estate", abb: "RE", value: 1, baseValue: 1, isDeleted: false },
   ];
   const [assets, setAssets] = useState(initialAssets);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingAsset, setEditingAsset] = useState(null);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [selectedTypes, setSelectedTypes] = useState([]);
 
   const apiClient = axios.create({
     baseURL: "/api",
@@ -78,122 +82,89 @@ export default function App() {
     fetchStockValueFromApi("4GLD.DE");
   }, [user]);
 
-  function handleFormSubmit(event) {
+  async function handleFormSubmit(event, initialValues) {
     event.preventDefault();
     const formData = new FormData(event.target);
     const formProps = Object.fromEntries(formData);
-    console.log(formProps);
-    if (formProps.id) {
-      //handle asset edits
-      const assetToUpdate = userAssets.find((asset) => asset._id === Number(formProps.id));
-      editAsset(Number(formProps.id), { quantity: formProps.quantity, notes: formProps.notes });
-      // displayToast(`"${assetToUpdate.name}" was updated.`);
-    } else {
-      //handle asset creation
-      const newAsset = {
-        ...formProps,
-        value: 0,
-        baseValue: 0,
-        isDeleted: false,
-        // id: userAssets.length,
-        abb: "", // TO DO
-      };
-      addAsset(newAsset);
-      // displayToast(`Asset ${newAsset.name} was created.`);
+    const numericFields = ["quantity", "value", "baseValue"];
+    numericFields.forEach((key) => {
+      if (formProps[key] !== undefined && formProps[key] !== "") {
+        formProps[key] = Number(formProps[key]);
+      }
+    });
+    // Sicherstellen, dass Current Value konsistent berechnet wird
+    formProps.value = Number(formProps.quantity || 0) * Number(formProps.baseValue || 0);
+    const idFromInitial = initialValues?._id ?? initialValues?.id;
+    const id = idFromInitial ?? formProps.id;
+    const isEdit = id !== undefined && id !== null && id !== "";
+    try {
+      if (isEdit) {
+        await apiClient.put(`/user?action=update`, { id, ...formProps });
+        setAssets((prev) => prev.map((a) => (a._id === id || a.id === id ? { ...a, ...formProps } : a)));
+        toast({ title: "Asset updated" });
+      } else {
+        const payload = { ...formProps, userId: user?._id };
+        const resp = await apiClient.post(`/user`, payload);
+        const created = resp.data;
+        setAssets((prev) => [created, ...prev]);
+        toast({ title: `Asset ${created.name} created` });
+      }
+    } catch (e) {
+      toast({ title: e.message || "Error saving asset", variant: "destructive" });
     }
-    resetForm();
+    setDialogOpen(false);
+    setEditingAsset(null);
   }
 
   function resetForm() {
-    setCurrentAssetId(null);
-    const assetForm__typeField = document.querySelector("#assetTypeField");
-    const assetForm__nameField = document.querySelector("#assetNameField");
-    const assetForm__quantityField = document.querySelector("#assetQuantityField");
-    const assetForm__notesField = document.querySelector("#assetNotesField");
-
-    assetForm__typeField.parentElement.classList.remove("is-dirty", "is-upgraded");
-    assetForm__nameField.parentElement.classList.remove("is-dirty", "is-upgraded");
-    assetForm__quantityField.parentElement.classList.remove("is-dirty", "is-upgraded");
-    assetForm__notesField.parentElement.classList.remove("is-dirty", "is-upgraded");
-    setFormIsVisible(false);
+    // shadcn Inputs benötigen kein manuelles Reset hier
   }
 
   async function handleDeleteAsset(assetId) {
-    // deleteAsset(id);
     try {
-      const response = await apiClient.post(`/user`, {
-        action: "softDelete",
-        assetId,
-      });
-      console.log(response.data);
-      // Weitere Aktionen...
+      await apiClient.put(`/user?action=softDelete`, { id: assetId });
+      setAssets((prev) => prev.map((a) => (a._id === assetId || a.id === assetId ? { ...a, isDeleted: true } : a)));
+      const assetName = (assets || []).find((asset) => asset._id === assetId || asset.id === assetId)?.name || "Asset";
+      toast({ title: `"${assetName}" deleted` });
     } catch (error) {
       console.error("Fehler beim Soft-Delete des Assets:", error);
+      toast({ title: error.message || "Delete failed", variant: "destructive" });
     }
-    // setUserAssets((prevUserAssets) => prevUserAssets.map((asset) => (asset.id === id ? { ...asset, isDeleted: true } : asset)));
-    const assetName = userAssets.find((asset) => asset._id === assetId).name;
-    // displaySnackbar(`"${assetName}" was deleted.`, "undo", () => {
-    //   handleUnDeleteAsset(id);
-    // });
   }
 
   async function handleUnDeleteAsset(assetId) {
-    // unDeleteAsset(id);
     try {
-      const response = await apiClient.post(`/user`, {
-        action: "softUndelete",
-        assetId,
-      });
-      console.log(response.data);
-      // Weitere Aktionen...
+      await apiClient.put(`/user?action=softUndelete`, { id: assetId });
+      setAssets((prev) => prev.map((a) => (a._id === assetId || a.id === assetId ? { ...a, isDeleted: false } : a)));
+      const assetName = (assets || []).find((asset) => asset._id === assetId || asset.id === assetId)?.name || "Asset";
+      toast({ title: `"${assetName}" restored` });
     } catch (error) {
       console.error("Fehler beim Soft-Undelete des Assets:", error);
+      toast({ title: error.message || "Restore failed", variant: "destructive" });
     }
-    // setUserAssets((prevUserAssets) => prevUserAssets.map((asset) => (asset.id === id ? { ...asset, isDeleted: false } : asset)));
-    const assetName = userAssets.find((asset) => asset._id === assetId).name;
-    // displayToast(`"${assetName}" was restored successfully.`);
   }
 
   function handleEditAsset(id) {
-    setCurrentAssetId(id);
-    setFormIsVisible(true);
-
-    //Handle Form Styling
-    const assetForm__typeField = document.querySelector("#assetTypeField");
-    const assetForm__nameField = document.querySelector("#assetNameField");
-    const assetForm__quantityField = document.querySelector("#assetQuantityField");
-    const assetForm__notesField = document.querySelector("#assetNotesField");
-
-    assetForm__typeField.parentElement.classList.add("is-dirty", "is-upgraded");
-    assetForm__nameField.parentElement.classList.add("is-dirty", "is-upgraded");
-    assetForm__quantityField.parentElement.classList.add("is-dirty", "is-upgraded");
-    assetForm__notesField.parentElement.classList.add("is-dirty", "is-upgraded");
-
-    setTimeout(() => {
-      //wait for form to render
-      const assetFormContainer = document.querySelector(".assetFormContainer");
-      assetFormContainer.scrollIntoView({ behavior: "smooth" });
-    }, 0);
+    const asset = (assets || []).find((a) => a._id === id || a.id === id);
+    setEditingAsset(asset || null);
+    setDialogOpen(true);
   }
 
-  function displayToast(error) {
-    var notification = document.querySelector(".mdl-js-snackbar");
-    notification.MaterialSnackbar.showSnackbar({
-      message: error,
-    });
+  function handleAddAsset(prefillType) {
+    setEditingAsset(prefillType ? { type: prefillType } : null);
+    setDialogOpen(true);
   }
 
-  function displaySnackbar(error, buttonText, buttonFunction) {
-    var notification = document.querySelector(".mdl-js-snackbar");
-    var data = {
-      message: error,
-      actionHandler: function () {
-        buttonFunction();
-      },
-      actionText: buttonText,
-      timeout: 4000,
-    };
-    notification.MaterialSnackbar.showSnackbar(data);
+  const handleToggleType = (type) => {
+    setSelectedTypes((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
+  };
+
+  function displayToast(message) {
+    toast({ title: message });
+  }
+
+  function displaySnackbar(message, buttonText, buttonFunction) {
+    toast({ title: message, action: { label: buttonText, onClick: buttonFunction } });
   }
 
   if (isLoading) {
@@ -201,28 +172,48 @@ export default function App() {
   }
 
   if (!user) {
-    return;
+    return null;
   }
 
   return (
     <>
       <div id="wrapper">
         <Login />
-        <h1>Track your assets!</h1>
-        <Prices />
-        <Form onFormSubmit={handleFormSubmit} resetForm={resetForm} />
+        <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4">Track your assets!</h1>
+        {/* <Form onFormSubmit={handleFormSubmit} resetForm={resetForm} /> */}
         <div id="assetControls" className="layoutElement">
-          <AssetControls />
+          <AssetControls handleUpdateValues={() => {}} onAdd={handleAddAsset} />
+        </div>
+        <div className="mb-8">
+          <Filters showDeleted={showDeleted} onToggleDeleted={setShowDeleted} selectedTypes={selectedTypes} onToggleType={handleToggleType} />
         </div>
         {assets ? (
-          <AssetList assets={assets} handleDeleteAsset={handleDeleteAsset} handleEditAsset={handleEditAsset}></AssetList>
+          <AssetList
+            assets={assets}
+            showDeleted={showDeleted}
+            selectedTypes={selectedTypes}
+            handleDeleteAsset={handleDeleteAsset}
+            handleUnDeleteAsset={handleUnDeleteAsset}
+            handleEditAsset={handleEditAsset}
+          ></AssetList>
         ) : (
           "Please add assets!"
         )}
         <Footer>
-          <TotalValue value={assets.reduce((sum, asset) => sum + asset.value, 0)} />
+          <TotalValue value={assets.filter((a) => !a.isDeleted).reduce((sum, asset) => sum + (asset.value || 0), 0)} />
         </Footer>
         <SnackBar />
+        <AssetDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          initialValues={editingAsset}
+          onSubmit={handleFormSubmit}
+          onDelete={handleDeleteAsset}
+          onCancel={() => {
+            setDialogOpen(false);
+            setEditingAsset(null);
+          }}
+        />
       </div>
     </>
   );

@@ -1,80 +1,109 @@
 import PropTypes from "prop-types";
-import styles from "./Form.module.css";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button.jsx";
+import { Input } from "@/components/ui/input.jsx";
+import { Textarea } from "@/components/ui/textarea.jsx";
+import { Label } from "@/components/ui/label.jsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.jsx";
+import { useToast } from "@/hooks/use-toast.js";
 
-export default function Form({ onFormSubmit, resetForm }) {
-  const [selectedType, setSelectedType] = useState("");
+export default function Form({ onFormSubmit, resetForm, formId = "form", hideActions = false, initialValues }) {
+  const [selectedType, setSelectedType] = useState(initialValues?.type || "");
+  const [qty, setQty] = useState(initialValues?.quantity !== undefined && initialValues?.quantity !== null ? String(initialValues.quantity) : "");
+  const [unitPrice, setUnitPrice] = useState(
+    initialValues?.baseValue !== undefined && initialValues?.baseValue !== null ? String(initialValues.baseValue) : ""
+  );
+  const { toast } = useToast();
 
-  const handleChange = (event) => {
-    setSelectedType(event.target.value);
-  };
+  useEffect(() => {
+    setSelectedType(initialValues?.type || "");
+    setQty(initialValues?.quantity !== undefined && initialValues?.quantity !== null ? String(initialValues.quantity) : "");
+    setUnitPrice(initialValues?.baseValue !== undefined && initialValues?.baseValue !== null ? String(initialValues.baseValue) : "");
+  }, [initialValues]);
+
+  const computedValue = (parseFloat(qty) || 0) * (parseFloat(unitPrice) || 0);
 
   return (
-    <div className={`assetFormContainer`}>
-      <h2>Edit asset</h2>
-      <form id="form" onSubmit={onFormSubmit}>
-        <div className="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
-          <label className="mdl-textfield__label" htmlFor="assetTypeField">
-            Type
-          </label>
-          <select
-            className="mdl-textfield__input"
-            id="assetTypeField"
-            autoComplete="off"
-            name="type"
-            required
-            value={selectedType}
-            onChange={handleChange}
-          >
-            <option value=""></option>
-            <option value="crypto">Crypto</option>
-            <option value="metals">Precious Metal</option>
-            <option value="stocks">Stock</option>
-            <option value="real_estate">Real Estate</option>
-            <option value="cash">Cash</option>
-          </select>
+    <div className="space-y-4">
+      <form id={formId} onSubmit={onFormSubmit} className="space-y-4">
+        <div className="grid gap-2">
+          <Label htmlFor="assetTypeField">Type</Label>
+          <Select onValueChange={setSelectedType} value={selectedType}>
+            <SelectTrigger id="assetTypeField" aria-label="Asset Type" name="type" required>
+              <SelectValue placeholder="Select a type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="crypto">Crypto</SelectItem>
+              <SelectItem value="metals">Precious Metal</SelectItem>
+              <SelectItem value="stocks">Stock</SelectItem>
+              <SelectItem value="real_estate">Real Estate</SelectItem>
+              <SelectItem value="cash">Cash</SelectItem>
+            </SelectContent>
+          </Select>
+          <input type="hidden" name="type" value={selectedType} />
         </div>
-        <div className="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
-          <label className="mdl-textfield__label" htmlFor="assetNameField">
-            Asset
-          </label>
-          <input className="mdl-textfield__input" type="text" id="assetNameField" autoComplete="off" name="name" required />
+
+        <div className="grid gap-2">
+          <Label htmlFor="assetNameField">Asset</Label>
+          <Input id="assetNameField" name="name" autoComplete="off" required defaultValue={initialValues?.name} autoFocus />
         </div>
-        <div className="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
-          <label className="mdl-textfield__label" htmlFor="assetQuantityField" id="assetQuantityLabel">
-            Quantity
-          </label>
-          <input
-            className="mdl-textfield__input"
-            type="text"
-            pattern="-?[0-9]*(\.[0-9]+)?"
+
+        <div className="grid gap-2">
+          <Label htmlFor="assetQuantityField">Units</Label>
+          <Input
             id="assetQuantityField"
-            autoComplete="off"
             name="quantity"
+            autoComplete="off"
+            type="text"
+            pattern="-?[0-9]*(\\.[0-9]+)?"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
           />
-          <span className="mdl-textfield__error">Input is not a number!</span>
-          <span id="assetUnitField"></span>
         </div>
-        <div className="mdl-textfield mdl-js-textfield mdl-textfield--floating-label">
-          <label className="mdl-textfield__label" htmlFor="assetNotesField">
-            Notes
-          </label>
-          <input className="mdl-textfield__input" type="text" id="assetNotesField" autoComplete="off" name="notes" />
+
+        <div className="grid gap-2">
+          <Label htmlFor="assetBaseValueField">Unit Price (EUR)</Label>
+          <Input
+            id="assetBaseValueField"
+            name="baseValue"
+            autoComplete="off"
+            type="text"
+            pattern="-?[0-9]*(\\.[0-9]+)?"
+            value={unitPrice}
+            onChange={(e) => setUnitPrice(e.target.value)}
+          />
         </div>
-        <input type="text" id="assetIdField" name="id" hidden defaultValue={"useCurrentAsset()?._id"} />
-        <button className="mdl-button mdl-js-button mdl-button--raised mdl-button--accent" id="saveButton">
-          Save
-        </button>
+
+        <div className="grid gap-2">
+          <Label htmlFor="assetValueField">Current Value (EUR)</Label>
+          <Input id="assetValueField" autoComplete="off" readOnly value={Number.isFinite(computedValue) ? computedValue : ""} />
+          <input type="hidden" name="value" value={Number.isFinite(computedValue) ? computedValue : 0} />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="assetNotesField">Notes</Label>
+          <Textarea
+            id="assetNotesField"
+            name="notes"
+            autoComplete="off"
+            defaultValue={initialValues?.notes}
+            className="h-14 focus:h-32 transition-[height] duration-200 ease-out"
+          />
+        </div>
+
+        <input type="text" id="assetIdField" name="id" hidden defaultValue={initialValues?._id || initialValues?.id} />
+
+        {hideActions ? null : (
+          <div className="flex gap-2">
+            <Button id="saveButton" type="submit" onClick={() => toast({ title: "Saving..." })}>
+              Save
+            </Button>
+            <Button id="cancelButton" type="button" variant="secondary" onClick={() => resetForm()}>
+              Cancel
+            </Button>
+          </div>
+        )}
       </form>
-      <button
-        className="mdl-button mdl-js-button mdl-button--raised mdl-button--colored"
-        id="cancelButton"
-        onClick={() => {
-          resetForm();
-        }}
-      >
-        Cancel
-      </button>
     </div>
   );
 }
@@ -82,4 +111,6 @@ export default function Form({ onFormSubmit, resetForm }) {
 Form.propTypes = {
   resetForm: PropTypes.func.isRequired,
   onFormSubmit: PropTypes.func.isRequired,
+  formId: PropTypes.string,
+  hideActions: PropTypes.bool,
 };

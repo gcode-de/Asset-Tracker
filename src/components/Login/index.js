@@ -4,16 +4,19 @@ export default function Login() {
   const { data: session } = useSession();
   if (session) {
     return (
-      <>
-        Angemeldet als {session.user.email || session.user.name} <br />
-        <button onClick={() => signOut()}>Sign out</button>
-      </>
+      <div className="mb-4 text-sm text-gray-600">
+        {session.user.email || session.user.name}
+        <button className="mx-2" onClick={() => signOut()}>
+          sign out
+        </button>
+      </div>
     );
   }
   return (
-    <>
-      Gast - bitte einloggen! <br />
-      <button onClick={() => signIn()}>Sign in</button>
-    </>
+    <div className="mb-4 text-sm text-gray-600">
+      <button className="mx-2" onClick={() => signIn()}>
+        register/sign in
+      </button>
+    </div>
   );
 }

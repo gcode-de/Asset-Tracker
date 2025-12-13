@@ -6,10 +6,17 @@
 
 import dbConnect from "@/db/connect";
 import User from "@/db/models/User";
-import Asset from "@/db/models/Asset";
 import { cleanAssets } from "../../../../defaultAssets";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
+
+const upsertEmbeddedAsset = (assets = [], id, update) => {
+  return assets.map((asset) => {
+    const match = asset?.id === id || `${asset?.id}` === `${id}`;
+    if (!match) return asset;
+    return { ...asset, ...update };
+  });
+};
 
 export default async function handler(request, response) {
   await dbConnect();
@@ -26,9 +33,28 @@ export default async function handler(request, response) {
 
     case "POST":
       try {
-        const newAsset = new Asset(request.body);
-        await newAsset.save();
-        await User.findByIdAndUpdate(request.body.userId, { $push: { assets: newAsset._id } });
+        const userId = request.body.userId;
+        const user = await User.findById(userId);
+        if (!user) {
+          return response.status(404).json({ error: "User not found" });
+        }
+
+        const incomingId = request.body.id;
+        const hasIncomingId = incomingId !== undefined && incomingId !== null && `${incomingId}`.trim() !== "";
+        const newAsset = {
+          id: hasIncomingId ? incomingId : Date.now(),
+          name: request.body.name ?? "",
+          quantity: request.body.quantity ?? 0,
+          notes: request.body.notes ?? "",
+          type: request.body.type ?? "",
+          abb: request.body.abb ?? "",
+          value: request.body.value ?? 0,
+          baseValue: request.body.baseValue ?? 0,
+          isDeleted: false,
+        };
+
+        user.assets.push(newAsset);
+        await user.save();
         return response.status(201).json(newAsset);
       } catch (error) {
         console.error(error);
@@ -37,21 +63,36 @@ export default async function handler(request, response) {
 
     case "PUT":
       try {
+        const user = await User.findOne({ email: userEmail || "null" });
+        if (!user) {
+          return response.status(404).json({ error: "User not found" });
+        }
+
         switch (action) {
-          case "update":
-            await Asset.findByIdAndUpdate(request.body.id, request.body);
+          case "update": {
+            user.assets = upsertEmbeddedAsset(user.assets, request.body.id, request.body);
+            user.markModified("assets");
+            await user.save();
             return response.status(200).json({ message: "Asset updated" });
-          case "softDelete":
-            await Asset.findByIdAndUpdate(request.body.id, { isDeleted: true });
+          }
+          case "softDelete": {
+            user.assets = upsertEmbeddedAsset(user.assets, request.body.id, { isDeleted: true });
+            user.markModified("assets");
+            await user.save();
             return response.status(200).json({ message: "Asset soft-deleted" });
-          case "softUndelete":
-            await Asset.findByIdAndUpdate(request.body.id, { isDeleted: false });
+          }
+          case "softUndelete": {
+            user.assets = upsertEmbeddedAsset(user.assets, request.body.id, { isDeleted: false });
+            user.markModified("assets");
+            await user.save();
             return response.status(200).json({ message: "Asset soft-undeleted" });
-          case "RESET_ASSETS":
-            await User.findByIdAndUpdate("65d89f5846848f9939128fe0", {
-              assets: cleanAssets,
-            });
+          }
+          case "RESET_ASSETS": {
+            user.assets = cleanAssets;
+            user.markModified("assets");
+            await user.save();
             return response.status(200).json({ message: "Assets reset successfully" });
+          }
           default:
             return response.status(400).json({ error: "Invalid action" });
         }

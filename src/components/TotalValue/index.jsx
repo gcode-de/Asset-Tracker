@@ -1,3 +1,5 @@
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card.jsx";
+
 export default function TotalValue({ value }) {
   const formatCurrency = (val) => {
     return new Intl.NumberFormat("de-DE", {
@@ -6,5 +8,12 @@ export default function TotalValue({ value }) {
     }).format(val);
   };
 
-  return <>Total Worth: {formatCurrency(value)}</>;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Total Worth</CardTitle>
+      </CardHeader>
+      <CardContent className="text-xl font-semibold">{formatCurrency(value)}</CardContent>
+    </Card>
+  );
 }
