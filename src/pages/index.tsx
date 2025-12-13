@@ -43,6 +43,7 @@ export default function App() {
   const [editingAsset, setEditingAsset] = useState<Partial<AssetType> | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState<"value" | "name" | "date">("date");
 
   const apiClient = axios.create({
     baseURL: "/api",
@@ -164,6 +165,25 @@ export default function App() {
     setSelectedTypes((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
   };
 
+  const getSortedAssets = (assets: AssetType[]) => {
+    const sorted = [...assets];
+    switch (sortBy) {
+      case "value":
+        return sorted.sort((a, b) => (b.value || 0) - (a.value || 0));
+      case "name":
+        return sorted.sort((a, b) => a.name.localeCompare(b.name));
+      case "date":
+        // Neueste zuerst - Assets mit höherer ID oder _id sind neuer
+        return sorted.sort((a, b) => {
+          const idA = Number(a._id || a.id || 0);
+          const idB = Number(b._id || b.id || 0);
+          return idB - idA;
+        });
+      default:
+        return sorted;
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -188,11 +208,18 @@ export default function App() {
           <AssetControls handleUpdateValues={() => {}} onAdd={handleAddAsset} />
         </div>
         <div className="mb-8">
-          <Filters showDeleted={showDeleted} onToggleDeleted={setShowDeleted} selectedTypes={selectedTypes} onToggleType={handleToggleType} />
+          <Filters
+            showDeleted={showDeleted}
+            onToggleDeleted={setShowDeleted}
+            selectedTypes={selectedTypes}
+            onToggleType={handleToggleType}
+            sortBy={sortBy}
+            onSortChange={setSortBy}
+          />
         </div>
         {assets ? (
           <AssetList
-            assets={assets}
+            assets={getSortedAssets(assets)}
             showDeleted={showDeleted}
             selectedTypes={selectedTypes}
             handleDeleteAsset={handleDeleteAsset}
