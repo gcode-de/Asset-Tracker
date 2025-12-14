@@ -1,5 +1,6 @@
 import dbConnect from "@/db/connect";
 import ApiCounter from "@/db/models/ApiCounter";
+import { findOneDoc, createDoc } from "@/db/utils";
 import type { NextApiRequest, NextApiResponse } from "next";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -12,9 +13,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
 
-  let counter = await ApiCounter.findOne({ date: today });
+  let counter = await findOneDoc(ApiCounter, { date: today });
   if (!counter) {
-    counter = await ApiCounter.create({ date: today, count: 0, limit: 25 });
+    counter = await createDoc(ApiCounter, { date: today, count: 0, limit: 25 });
   }
 
   return res.status(200).json({

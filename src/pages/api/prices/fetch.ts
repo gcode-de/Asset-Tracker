@@ -2,6 +2,7 @@ import dbConnect from "@/db/connect";
 import Price from "@/db/models/Price";
 import User from "@/db/models/User";
 import ApiCounter from "@/db/models/ApiCounter";
+import { findOneDoc, createDoc, findOneAndUpdateDoc } from "@/db/utils";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -49,10 +50,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
 
   // Get or create today's counter
-  const existingCounter = await (ApiCounter as any).findOne({ date: today });
+  const existingCounter = await findOneDoc(ApiCounter, { date: today });
   let counter = existingCounter;
   if (!counter) {
-    counter = await (ApiCounter as any).create({ date: today, count: 0, limit: 25 });
+    counter = await createDoc(ApiCounter, { date: today, count: 0, limit: 25 });
   }
 
   // Check if we've hit the limit
@@ -144,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Update counter in DB
   if (apiCallCount > 0) {
-    await (ApiCounter as any).findOneAndUpdate({ date: today }, { $inc: { count: apiCallCount } }, { upsert: true });
+    await findOneAndUpdateDoc(ApiCounter, { date: today }, { $inc: { count: apiCallCount } }, { upsert: true });
   }
 
   return res.status(200).json({
