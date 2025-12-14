@@ -11,6 +11,8 @@ import { useEffect, useState, FormEvent } from "react";
 import { useToast } from "@/hooks/use-toast";
 import AssetDialog from "@/components/AssetDialog";
 import { AssetType } from "@/components/Asset";
+import Prices from "@/components/Prices";
+import ApiLimitBadge from "@/components/ApiLimitBadge";
 
 interface UserData {
   _id: string;
@@ -28,7 +30,7 @@ export default function App() {
       id: 3,
       name: "Gold",
       quantity: 3.5,
-      notes: "recently bought",
+      notes: "",
       type: "metals",
       abb: "gold",
       value: 10_000,
@@ -44,6 +46,7 @@ export default function App() {
   const [showDeleted, setShowDeleted] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<"value" | "name" | "date">("date");
+  const [apiRemaining, setApiRemaining] = useState<number>(25);
 
   const apiClient = axios.create({
     baseURL: "/api",
@@ -52,38 +55,47 @@ export default function App() {
     },
   });
 
-  async function fetchCryptoValueFromApi(fromCurrency: string) {
-    const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${fromCurrency}&to_currency=EUR&apikey=${process.env.NEXT_PUBLIC_ALPHAVANTAGE}`;
-    try {
-      const response = await fetch(url);
-      const data = await response.json();
-      const content = data?.["Realtime Currency Exchange Rate"];
-      console.log("API", content?.["1. From_Currency Code"], "to", content?.["3. To_Currency Code"], content?.["5. Exchange Rate"]);
-    } catch (error) {
-      console.error(error);
-    }
-  }
-
-  async function fetchStockValueFromApi(symbol: string) {
-    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${process.env.NEXT_PUBLIC_ALPHAVANTAGE}`;
-    try {
-      const response = await fetch(url);
-      const data = await response.json();
-      const content = data?.["Global Quote"];
-      console.log("API", content?.["01. symbol"], content?.["05. price"]);
-    } catch (error) {
-      console.error(error);
-    }
-  }
-
-  const { data: user, isLoading, error, mutate } = useSWR<UserData>("/api/user");
+  const { data: user, isLoading } = useSWR<UserData>("/api/user");
 
   useEffect(() => {
     if (!user) {
       return;
     }
-    setAssets(user.assets);
-    fetchStockValueFromApi("4GLD.DE");
+
+    // Load prices from DB and merge with assets
+    const loadPricesAndUpdateAssets = async () => {
+      try {
+        const pricesResponse = await fetch("/api/prices");
+        const pricesData = await pricesResponse.json();
+
+        if (Array.isArray(pricesData)) {
+          // Create price map for quick lookup
+          const priceMap = new Map(pricesData.map((p: any) => [p.symbol, p.value]));
+
+          // Update assets with baseValue from prices
+          const updatedAssets = user.assets.map((asset: AssetType) => {
+            const priceValue = priceMap.get(asset.abb);
+            if (priceValue) {
+              return {
+                ...asset,
+                baseValue: priceValue,
+                value: (asset.quantity || 0) * priceValue,
+              };
+            }
+            return asset;
+          });
+
+          setAssets(updatedAssets);
+        } else {
+          setAssets(user.assets);
+        }
+      } catch (err) {
+        console.error("Error loading prices:", err);
+        setAssets(user.assets);
+      }
+    };
+
+    loadPricesAndUpdateAssets();
   }, [user]);
 
   async function handleFormSubmit(event: FormEvent<HTMLFormElement>, initialValues?: Partial<AssetType> | null) {
@@ -118,10 +130,6 @@ export default function App() {
     }
     setDialogOpen(false);
     setEditingAsset(null);
-  }
-
-  function resetForm() {
-    // shadcn Inputs benötigen kein manuelles Reset hier
   }
 
   async function handleDeleteAsset(assetId: string | number) {
@@ -159,6 +167,69 @@ export default function App() {
   function handleAddAsset(prefillType?: string) {
     setEditingAsset(prefillType ? { type: prefillType } : null);
     setDialogOpen(true);
+  }
+
+  function handleSearchAndAddAsset(symbol: string, name: string, assetClass?: string) {
+    setEditingAsset({
+      name: name,
+      abb: symbol,
+      quantity: 0,
+      baseValue: 0,
+      value: 0,
+      type: assetClass || "",
+      notes: "",
+      isDeleted: false,
+    });
+    setDialogOpen(true);
+  }
+
+  async function handleReloadPrices() {
+    try {
+      const response = await apiClient.post("/prices/fetch");
+      const data = response.data;
+
+      if (data.fetched > 0) {
+        // Reload prices from DB
+        const pricesResponse = await fetch("/api/prices");
+        const pricesData = await pricesResponse.json();
+
+        if (Array.isArray(pricesData)) {
+          const priceMap = new Map(pricesData.map((p: any) => [p.symbol, p.value]));
+
+          const updatedAssets = assets.map((asset: AssetType) => {
+            const priceValue = priceMap.get(asset.abb);
+            if (priceValue) {
+              return {
+                ...asset,
+                baseValue: priceValue,
+                value: (asset.quantity || 0) * priceValue,
+              };
+            }
+            return asset;
+          });
+
+          setAssets(updatedAssets);
+          toast({
+            title: `Updated ${data.fetched} prices`,
+            description: `${data.apiCalls} API calls • ${data.remainingCalls} calls remaining today`,
+          });
+        }
+      } else {
+        toast({ title: "No prices updated", description: "All prices are up to date" });
+      }
+    } catch (error) {
+      const axError = error as any;
+      if (axError.response?.status === 429) {
+        toast({
+          title: "API Limit Reached",
+          description: "You've exceeded the free tier limit (25 calls/day). Try again tomorrow.",
+          variant: "destructive",
+        });
+      } else {
+        const message = error instanceof Error ? error.message : "Failed to reload prices";
+        toast({ title: message, variant: "destructive" });
+      }
+    }
   }
 
   const handleToggleType = (type: string) => {
@@ -205,7 +276,12 @@ export default function App() {
         <Login />
         <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-4">Track your assets!</h1>
         <div id="assetControls" className="layoutElement">
-          <AssetControls handleUpdateValues={() => {}} onAdd={handleAddAsset} />
+          <AssetControls
+            handleUpdateValues={handleReloadPrices}
+            onAdd={handleAddAsset}
+            onSearch={handleSearchAndAddAsset}
+            apiRemaining={apiRemaining}
+          />
         </div>
         <div className="mb-8">
           <Filters
@@ -229,6 +305,11 @@ export default function App() {
         ) : (
           "Please add assets!"
         )}
+        <Prices />
+        {/* Hidden ApiLimitBadge to sync apiRemaining state */}
+        <div className="hidden">
+          <ApiLimitBadge onRemainingChange={setApiRemaining} />
+        </div>
         <Footer>
           <TotalValue value={assets.filter((a) => !a.isDeleted).reduce((sum, asset) => sum + (asset.value || 0), 0)} />
         </Footer>

@@ -1,6 +1,7 @@
 import dbConnect from "@/db/connect";
 import Price from "@/db/models/Price";
 import User from "@/db/models/User";
+import ApiCounter from "@/db/models/ApiCounter";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -44,35 +45,70 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await dbConnect();
 
-  // Find local user by email
-  let localUser = null;
-  if (session.user?.email) {
-    localUser = await User.findOne({ email: session.user.email });
+  // Get today's date for counter
+  const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
+
+  // Get or create today's counter
+  let counter = await ApiCounter.findOne({ date: today });
+  if (!counter) {
+    counter = await ApiCounter.create({ date: today, count: 0, limit: 25 });
   }
 
-  if (!localUser) return res.status(404).json({ error: "Local user not found" });
+  // Check if we've hit the limit
+  if (counter.count >= counter.limit) {
+    return res.status(429).json({
+      error: "API limit reached for today",
+      count: counter.count,
+      limit: counter.limit,
+    });
+  }
 
-  const assets = Array.isArray(localUser.assets) ? localUser.assets : [];
+  // Find all users and collect all unique asset symbols
+  const allUsers = await User.find({});
+  const assetMap = new Map<string, { symbol: string; type: string }>();
+
+  for (const user of allUsers) {
+    const assets = Array.isArray(user.assets) ? user.assets : [];
+    for (const asset of assets) {
+      const symbol = (asset.abb || asset.name || asset.id || "").toString().toUpperCase();
+      if (!symbol) continue;
+
+      // Store unique symbols with their type
+      if (!assetMap.has(symbol)) {
+        assetMap.set(symbol, {
+          symbol,
+          type: (asset.type || "").toLowerCase(),
+        });
+      }
+    }
+  }
+
+  const uniqueAssets = Array.from(assetMap.values());
   const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
 
   if (!ALPHA_KEY) {
     return res.status(500).json({ error: "AlphaVantage API key not configured (ALPHAVANTAGE_KEY)" });
   }
 
-  for (const asset of assets) {
-    const symbol = (asset.abb || asset.name || asset.ticker || asset.id || "").toString();
-    if (!symbol) continue;
+  let apiCallCount = 0;
+
+  for (const asset of uniqueAssets) {
+    const { symbol, type } = asset;
 
     try {
       let fetched: FetchResult | null = null;
-      if ((asset.type || "").toLowerCase() === "crypto") {
-        fetched = await fetchCryptoToEUR(symbol.toUpperCase());
-      } else if ((asset.type || "").toLowerCase() === "stocks" || (asset.type || "").toLowerCase() === "stock") {
+
+      if (type === "crypto") {
+        fetched = await fetchCryptoToEUR(symbol);
+        apiCallCount++; // Increment for each API call
+      } else if (type === "stocks" || type === "stock") {
         fetched = await fetchStock(symbol);
+        apiCallCount++; // Increment for each API call
       } else {
-        // Heuristic: if abb contains non-numeric letters and possible dot, treat as stock
+        // Heuristic: if symbol looks like a stock ticker, try fetching
         if (/^[A-Z0-9\.\-]+$/i.test(symbol)) {
           fetched = await fetchStock(symbol);
+          apiCallCount++; // Increment for each API call
         } else {
           // skip unsupported types (metals, real_estate, cash)
           continue;
@@ -84,13 +120,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      const doc = await Price.create({
-        symbol,
-        value: fetched.value,
-        currency: fetched.currency || "USD",
-        timestamp: new Date(),
-        source: "alphavantage",
-      });
+      // Upsert: Update existing or create new price entry (no duplicates!)
+      const doc = await Price.findOneAndUpdate(
+        { symbol }, // Find by symbol
+        {
+          symbol,
+          value: fetched.value,
+          currency: fetched.currency || "USD",
+          timestamp: new Date(),
+          recordedAt: new Date(),
+          source: "alphavantage",
+        },
+        { upsert: true, new: true } // Create if doesn't exist, return new doc
+      );
 
       results.push({ symbol, ok: true, price: doc });
     } catch (e) {
@@ -99,5 +141,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  return res.status(200).json({ fetched: results.length, results });
+  // Update counter in DB
+  if (apiCallCount > 0) {
+    await ApiCounter.findOneAndUpdate({ date: today }, { $inc: { count: apiCallCount } }, { upsert: true });
+  }
+
+  return res.status(200).json({
+    fetched: results.filter((r) => r.ok).length,
+    total: results.length,
+    apiCalls: apiCallCount,
+    remainingCalls: Math.max(0, counter.limit - (counter.count + apiCallCount)),
+    results,
+  });
 }
