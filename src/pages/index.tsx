@@ -69,17 +69,20 @@ export default function App() {
         const pricesData = await pricesResponse.json();
 
         if (Array.isArray(pricesData)) {
-          // Normalize symbols to uppercase and create quick lookup map
-          const priceMap = new Map(pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), p.value]));
+          // Create price map with value and timestamp
+          const priceMap = new Map(
+            pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), { value: p.value, updatedAt: p.recordedAt || p.timestamp }])
+          );
 
-          // Update assets with baseValue from prices
+          // Update assets with baseValue and priceUpdatedAt from prices
           const updatedAssets = user.assets.map((asset: AssetType) => {
-            const priceValue = priceMap.get(String(asset.abb || "").toUpperCase());
-            if (priceValue) {
+            const priceData = priceMap.get(String(asset.abb || "").toUpperCase());
+            if (priceData) {
               return {
                 ...asset,
-                baseValue: priceValue,
-                value: (asset.quantity || 0) * priceValue,
+                baseValue: priceData.value,
+                value: (asset.quantity || 0) * priceData.value,
+                priceUpdatedAt: priceData.updatedAt,
               };
             }
             return asset;
@@ -194,15 +197,18 @@ export default function App() {
         const pricesData = await pricesResponse.json();
 
         if (Array.isArray(pricesData)) {
-          const priceMap = new Map(pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), p.value]));
+          const priceMap = new Map(
+            pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), { value: p.value, updatedAt: p.recordedAt || p.timestamp }])
+          );
 
           const updatedAssets = assets.map((asset: AssetType) => {
-            const priceValue = priceMap.get(String(asset.abb || "").toUpperCase());
-            if (priceValue) {
+            const priceData = priceMap.get(String(asset.abb || "").toUpperCase());
+            if (priceData) {
               return {
                 ...asset,
-                baseValue: priceValue,
-                value: (asset.quantity || 0) * priceValue,
+                baseValue: priceData.value,
+                value: (asset.quantity || 0) * priceData.value,
+                priceUpdatedAt: priceData.updatedAt,
               };
             }
             return asset;
