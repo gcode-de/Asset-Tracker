@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AssetType } from "@/components/Asset";
+import { AlertCircle } from "lucide-react";
 
 interface FormProps {
   onFormSubmit?: (e: FormEvent<HTMLFormElement>) => void;
@@ -16,12 +17,14 @@ interface FormProps {
 
 export default function Form({ onFormSubmit, resetForm, formId = "asset-form", hideActions = false, initialValues }: FormProps) {
   const [selectedType, setSelectedType] = useState(initialValues?.type || "");
+  const [abb, setAbb] = useState(initialValues?.abb || "");
   const [qty, setQty] = useState(initialValues?.quantity?.toString() || "");
   const [unitPrice, setUnitPrice] = useState(initialValues?.baseValue?.toString() || "");
   const [value, setValue] = useState(initialValues?.value?.toString() || "");
 
   useEffect(() => {
     setSelectedType(initialValues?.type || "");
+    setAbb(initialValues?.abb || "");
     setQty(initialValues?.quantity?.toString() || "");
     setUnitPrice(initialValues?.baseValue?.toString() || "");
     setValue(initialValues?.value?.toString() || "");
@@ -40,6 +43,14 @@ export default function Form({ onFormSubmit, resetForm, formId = "asset-form", h
   const handleUnitPriceChange = (e: ChangeEvent<HTMLInputElement>) => {
     setUnitPrice(e.target.value);
   };
+
+  const handleAbbChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setAbb(e.target.value);
+  };
+
+  // Check if asset type needs a symbol for automatic price fetching
+  const needsSymbolForPrices = ["metals", "cash", "real_estate"].includes(selectedType);
+  const showSymbolWarning = needsSymbolForPrices && !abb?.trim();
 
   return (
     <div className="space-y-4">
@@ -67,8 +78,17 @@ export default function Form({ onFormSubmit, resetForm, formId = "asset-form", h
         </div>
 
         <div className="grid gap-2">
-          <Label htmlFor="abbField">Abbreviation</Label>
-          <Input id="abbField" name="abb" defaultValue={initialValues?.abb || ""} placeholder="BTC, GOLD..." />
+          <Label htmlFor="abbField">Symbol / Ticker</Label>
+          <Input id="abbField" name="abb" value={abb} onChange={handleAbbChange} placeholder="BTC, AAPL, 4GLD.DE..." />
+          {showSymbolWarning && (
+            <div className="flex items-start gap-2 p-2 text-xs bg-amber-50 border border-amber-200 rounded">
+              <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="text-amber-900">
+                <span className="font-semibold">No automatic price updates:</span> This asset type requires a valid symbol (e.g., stock ticker or
+                crypto code) to fetch prices automatically.
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">

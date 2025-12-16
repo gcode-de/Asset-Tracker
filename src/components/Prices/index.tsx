@@ -18,6 +18,20 @@ interface Price {
   timestamp?: string;
 }
 
+interface FetchResultItem {
+  symbol: string;
+  ok: boolean;
+  reason?: string;
+}
+
+interface FetchSummary {
+  fetched: number;
+  total: number;
+  apiCalls: number;
+  remainingCalls: number;
+  results: FetchResultItem[];
+}
+
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export default function Prices() {
@@ -27,6 +41,8 @@ export default function Prices() {
   const { toast } = useToast();
   const [timeSinceUpdate, setTimeSinceUpdate] = useState<string>("Never");
   const [remaining, setRemaining] = useState<number>(25);
+  const [lastSummary, setLastSummary] = useState<FetchSummary | null>(null);
+  const [showDetails, setShowDetails] = useState<boolean>(false);
 
   const lastFetchTime = useMemo(() => {
     if (!prices || prices.length === 0) return null;
@@ -93,6 +109,14 @@ export default function Prices() {
           description: `${data.apiCalls} API calls • ${data.remainingCalls} calls remaining today`,
         });
       }
+      // Store last results for diagnostics
+      setLastSummary({
+        fetched: data.fetched,
+        total: data.total,
+        apiCalls: data.apiCalls,
+        remainingCalls: data.remainingCalls,
+        results: Array.isArray(data.results) ? data.results.map((r: any) => ({ symbol: r.symbol, ok: !!r.ok, reason: r.reason })) : [],
+      });
       await mutate();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -132,9 +156,60 @@ export default function Prices() {
           </div>
         </div>
         <Button onClick={onFetchLatest} disabled={!session || saving || remaining <= 0} className="w-full">
-          {saving ? "Fetching..." : "Fetch latest prices"}
+          {saving ? (
+            lastSummary && lastSummary.total > 0 ? (
+              <span className="flex items-center gap-2">
+                <RotateCcw className="h-4 w-4 animate-spin" />
+                Fetching assets... (0/{lastSummary.total})
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <RotateCcw className="h-4 w-4 animate-spin" />
+                Fetching prices...
+              </span>
+            )
+          ) : (
+            "Fetch latest prices"
+          )}
         </Button>
         <Separator className="my-4" />
+        {lastSummary && (
+          <div className="mb-4 p-3 border rounded-md bg-muted/20">
+            <div className="text-sm mb-2">
+              <span className="font-medium">Last Fetch:</span> {lastSummary.fetched}/{lastSummary.total} updated • {lastSummary.apiCalls} calls •{" "}
+              {lastSummary.remainingCalls} remaining
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setShowDetails((v) => !v)}>
+              {showDetails ? "Hide details" : "Show details"}
+            </Button>
+            {showDetails && (
+              <div className="mt-3 max-h-48 overflow-y-auto text-sm">
+                {lastSummary.results.length === 0 ? (
+                  <div className="text-muted-foreground">No result details.</div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Symbol</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Reason</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {lastSummary.results.map((r) => (
+                        <TableRow key={`${r.symbol}-${r.ok}-${r.reason ?? ""}`}>
+                          <TableCell>{r.symbol}</TableCell>
+                          <TableCell>{r.ok ? "ok" : "failed"}</TableCell>
+                          <TableCell className="text-muted-foreground">{r.reason || ""}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {Array.isArray(prices) && prices.length > 0 && (
           <Table>
             <TableHeader>

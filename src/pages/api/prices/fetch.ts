@@ -15,13 +15,60 @@ interface FetchResult {
   raw?: any;
 }
 
+// Helper: Wait for specified milliseconds (AlphaVantage requires 1 req/sec)
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Normalize certain exchange suffixes to AlphaVantage conventions
+function normalizeStockSymbol(symbol: string): string {
+  let s = String(symbol || "");
+  // Common mappings: Yahoo-style -> AlphaVantage style
+  s = s.replace(/\.LON$/i, ".L");
+  s = s.replace(/\.DEX$/i, ".DE");
+  return s;
+}
+
+function inferCurrencyForStock(symbol: string): string {
+  const s = symbol.toUpperCase();
+  if (/(\.LON$|\.L$)/.test(s)) return "GBP";
+  if (/(\.DE$|\.FRA$|\.DEX$|\.AS$|\.PA$|\.MI$|\.BR$)/.test(s)) return "EUR";
+  if (/\.TO$/.test(s)) return "CAD";
+  if (/\.HK$/.test(s)) return "HKD";
+  if (/\.T$/.test(s)) return "JPY";
+  return "USD";
+}
+
+function ensureAlphaNotThrottled(data: any) {
+  if (data?.Note) {
+    // AlphaVantage minute/day throttle reached
+    const err = new Error("ALPHA_RATE_LIMIT: " + String(data.Note));
+    (err as any).code = "ALPHA_RATE_LIMIT";
+    throw err;
+  }
+  if (data?.["Error Message"]) {
+    const err = new Error("ALPHA_INVALID: " + String(data["Error Message"]));
+    (err as any).code = "ALPHA_INVALID";
+    throw err;
+  }
+  if (data?.Information) {
+    const err = new Error("ALPHA_INFO: " + String(data.Information));
+    (err as any).code = "ALPHA_INFO";
+    throw err;
+  }
+}
+
 async function fetchStock(symbol: string): Promise<FetchResult | null> {
-  const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${ALPHA_KEY}`;
+  const norm = normalizeStockSymbol(symbol);
+  const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(norm)}&apikey=${ALPHA_KEY}`;
   const resp = await fetch(url);
   const data = await resp.json();
+  ensureAlphaNotThrottled(data);
   const content = data?.["Global Quote"];
   const price = content?.["05. price"];
-  return price ? { value: Number(price), currency: "USD", raw: content } : null;
+  if (!price) return null;
+  await delay(1000); // AlphaVantage: 1 request per second
+  return { value: Number(price), currency: inferCurrencyForStock(norm), raw: content };
 }
 
 async function fetchCryptoToEUR(symbol: string): Promise<FetchResult | null> {
@@ -30,8 +77,10 @@ async function fetchCryptoToEUR(symbol: string): Promise<FetchResult | null> {
   )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
   const resp = await fetch(url);
   const data = await resp.json();
+  ensureAlphaNotThrottled(data);
   const content = data?.["Realtime Currency Exchange Rate"];
   const rate = content?.["5. Exchange Rate"];
+  await delay(1000); // AlphaVantage: 1 request per second
   return rate ? { value: Number(rate), currency: "EUR", raw: content } : null;
 }
 
@@ -65,23 +114,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // Find all users and collect all unique asset symbols
-  const allUsers = await User.find({});
+  // Find current user and collect unique asset symbols
+  const userEmail = session?.user?.email;
+  if (!userEmail) {
+    return res.status(400).json({ error: "User email not available in session" });
+  }
+
+  const currentUser = await User.findOne({ email: userEmail });
+  if (!currentUser) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
   const assetMap = new Map<string, { symbol: string; type: string }>();
+  const assets = Array.isArray(currentUser.assets) ? currentUser.assets : [];
+  for (const asset of assets) {
+    // Skip soft-deleted assets
+    if ((asset as any).isDeleted) continue;
+    const symbol = (asset.abb || asset.name || asset.id || "").toString().toUpperCase();
+    if (!symbol) continue;
 
-  for (const user of allUsers) {
-    const assets = Array.isArray(user.assets) ? user.assets : [];
-    for (const asset of assets) {
-      const symbol = (asset.abb || asset.name || asset.id || "").toString().toUpperCase();
-      if (!symbol) continue;
-
-      // Store unique symbols with their type
-      if (!assetMap.has(symbol)) {
-        assetMap.set(symbol, {
-          symbol,
-          type: (asset.type || "").toLowerCase(),
-        });
-      }
+    // Store unique symbols with their type
+    if (!assetMap.has(symbol)) {
+      assetMap.set(symbol, {
+        symbol,
+        type: (asset.type || "").toLowerCase(),
+      });
     }
   }
 
@@ -93,9 +150,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   let apiCallCount = 0;
+  const fxCache = new Map<string, number>(); // from->EUR rate
+
+  async function getFxToEUR(from: string): Promise<number> {
+    const cur = (from || "").toUpperCase();
+    if (cur === "EUR") return 1;
+    if (fxCache.has(cur)) return fxCache.get(cur)!;
+    const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
+      cur
+    )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    ensureAlphaNotThrottled(data);
+    const rateStr = data?.["Realtime Currency Exchange Rate"]?.["5. Exchange Rate"];
+    const rate = rateStr ? Number(rateStr) : NaN;
+    if (!rate || Number.isNaN(rate)) throw new Error(`FX rate not available for ${cur}->EUR`);
+    fxCache.set(cur, rate);
+    apiCallCount++;
+    await delay(1000); // AlphaVantage: 1 request per second
+    return rate;
+  }
 
   for (const asset of uniqueAssets) {
-    const { symbol, type } = asset;
+    const { symbol } = asset;
+    let type = (asset.type || "").toLowerCase();
+
+    // Normalize some common types
+    if (type === "etf" || type === "fund") type = "stock";
+
+    // Skip unsupported categories entirely (no API call)
+    const unsupported = new Set(["metal", "metals", "commodity", "commodities", "cash", "real_estate", "realestate", "property"]);
+    if (unsupported.has(type)) {
+      results.push({ symbol, ok: false, reason: `unsupported type: ${type}` });
+      continue;
+    }
 
     try {
       let fetched: FetchResult | null = null;
@@ -106,11 +194,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else if (type === "stocks" || type === "stock") {
         fetched = await fetchStock(symbol);
         apiCallCount++; // Increment for each API call
+        // Convert non-EUR quotes to EUR for consistency
+        if (fetched && fetched.currency && fetched.currency !== "EUR") {
+          const rate = await getFxToEUR(fetched.currency);
+          fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };
+        }
       } else {
-        // Heuristic: if symbol looks like a stock ticker, try fetching
-        if (/^[A-Z0-9\.\-]+$/i.test(symbol)) {
+        // Heuristic: only for unknown types, try stock API if symbol looks like a ticker
+        if (/^[A-Z0-9\.-]+$/i.test(symbol)) {
           fetched = await fetchStock(symbol);
           apiCallCount++; // Increment for each API call
+          if (fetched && fetched.currency && fetched.currency !== "EUR") {
+            const rate = await getFxToEUR(fetched.currency);
+            fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };
+          }
         } else {
           // skip unsupported types (metals, real_estate, cash)
           continue;
@@ -130,7 +227,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           value: fetched.value,
           currency: fetched.currency || "USD",
           timestamp: new Date(),
-          recordedAt: new Date(),
           source: "alphavantage",
         },
         { upsert: true, new: true } // Create if doesn't exist, return new doc
@@ -140,6 +236,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       results.push({ symbol, ok: false, reason: message });
+      // If we hit AlphaVantage throttle, stop further requests to save remaining calls
+      if ((e as any)?.code === "ALPHA_RATE_LIMIT" || String(message).startsWith("ALPHA_RATE_LIMIT")) {
+        break;
+      }
     }
   }
 

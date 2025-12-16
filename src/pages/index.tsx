@@ -23,17 +23,17 @@ interface UserData {
 export default function App() {
   const { toast } = useToast();
   const initialAssets: AssetType[] = [
-    { id: 0, name: "Bitcoin", quantity: 0.01288, notes: "", type: "crypto", abb: "btc", value: 10_000, baseValue: 40_000, isDeleted: false },
-    { id: 1, name: "Ethereum", quantity: 0.029, notes: "", type: "crypto", abb: "eth", value: 10_000, baseValue: 4_000, isDeleted: false },
-    { id: 2, name: "Silver", quantity: 754, notes: "", type: "metals", abb: "silver", value: 10_000, baseValue: 20.7, isDeleted: false },
+    { id: 0, name: "Bitcoin", quantity: 0.01, notes: "", type: "crypto", abb: "btc", value: 400, baseValue: 40_000, isDeleted: false },
+    { id: 1, name: "Ethereum", quantity: 1, notes: "", type: "crypto", abb: "eth", value: 4_000, baseValue: 4_000, isDeleted: false },
+    { id: 2, name: "Silver", quantity: 4, notes: "", type: "metals", abb: "silver", value: 100, baseValue: 20.7, isDeleted: false },
     {
       id: 3,
       name: "Gold",
-      quantity: 3.5,
+      quantity: 0.5,
       notes: "",
       type: "metals",
       abb: "gold",
-      value: 10_000,
+      value: 950,
       baseValue: 1_900,
       isDeleted: false,
     },
@@ -69,12 +69,12 @@ export default function App() {
         const pricesData = await pricesResponse.json();
 
         if (Array.isArray(pricesData)) {
-          // Create price map for quick lookup
-          const priceMap = new Map(pricesData.map((p: any) => [p.symbol, p.value]));
+          // Normalize symbols to uppercase and create quick lookup map
+          const priceMap = new Map(pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), p.value]));
 
           // Update assets with baseValue from prices
           const updatedAssets = user.assets.map((asset: AssetType) => {
-            const priceValue = priceMap.get(asset.abb);
+            const priceValue = priceMap.get(String(asset.abb || "").toUpperCase());
             if (priceValue) {
               return {
                 ...asset,
@@ -194,10 +194,10 @@ export default function App() {
         const pricesData = await pricesResponse.json();
 
         if (Array.isArray(pricesData)) {
-          const priceMap = new Map(pricesData.map((p: any) => [p.symbol, p.value]));
+          const priceMap = new Map(pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), p.value]));
 
           const updatedAssets = assets.map((asset: AssetType) => {
-            const priceValue = priceMap.get(asset.abb);
+            const priceValue = priceMap.get(String(asset.abb || "").toUpperCase());
             if (priceValue) {
               return {
                 ...asset,

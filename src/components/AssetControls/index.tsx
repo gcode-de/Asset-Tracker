@@ -61,22 +61,6 @@ export default function AssetControls({ handleUpdateValues, onAdd, onSearch, api
           </TooltipTrigger>
           <TooltipContent side="bottom">Add asset</TooltipContent>
         </Tooltip>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              id="updateValuesButton"
-              variant="secondary"
-              size="icon"
-              aria-label="Reload values"
-              onClick={onReload}
-              disabled={updating || apiRemaining <= 0}
-            >
-              <RefreshCcw className={`h-4 w-4 ${updating ? "animate-spin" : ""}`} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Reload values</TooltipContent>
-        </Tooltip>
       </TooltipProvider>
 
       <AssetSearchDialog open={searchOpen} onOpenChange={setSearchOpen} onAddAsset={handleSearchSelect} />
