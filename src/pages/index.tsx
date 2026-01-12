@@ -5,7 +5,7 @@ import SnackBar from "@/components/SnackBar";
 import Footer from "@/components/Footer";
 import TotalValue from "@/components/TotalValue";
 import Login from "@/components/Login";
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 import axios, { AxiosError } from "axios";
 import { useEffect, useState, FormEvent, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
@@ -198,6 +198,7 @@ export default function App() {
           });
 
           setAssets(updatedAssets);
+          mutate("/api/user");
           toast({
             title: `Updated ${data.fetched} prices`,
             description: `${data.apiCalls} API calls • ${data.remainingCalls} calls remaining today`,
