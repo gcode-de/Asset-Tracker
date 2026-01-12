@@ -133,11 +133,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const symbol = (asset.abb || asset.name || asset.id || "").toString().toUpperCase();
     if (!symbol) continue;
 
+    const type = (asset.type || "").toLowerCase();
+    // Skip unsupported categories entirely
+    const unsupported = new Set(["commodity", "commodities", "cash", "real_estate", "realestate", "property"]);
+    if (unsupported.has(type)) continue;
+
     // Store unique symbols with their type
     if (!assetMap.has(symbol)) {
       assetMap.set(symbol, {
         symbol,
-        type: (asset.type || "").toLowerCase(),
+        type,
       });
     }
   }
@@ -177,13 +182,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Normalize some common types
     if (type === "etf" || type === "fund") type = "stock";
-
-    // Skip unsupported categories entirely (no API call)
-    const unsupported = new Set(["metal", "metals", "commodity", "commodities", "cash", "real_estate", "realestate", "property"]);
-    if (unsupported.has(type)) {
-      results.push({ symbol, ok: false, reason: `unsupported type: ${type}` });
-      continue;
-    }
 
     try {
       let fetched: FetchResult | null = null;
@@ -245,7 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Update counter in DB
   if (apiCallCount > 0) {
-    await findOneAndUpdateDoc(ApiCounter, { date: today }, { $inc: { count: apiCallCount } }, { upsert: true });
+    await ApiCounter.updateOne({ date: today }, { $inc: { count: apiCallCount } }, { upsert: true });
   }
 
   return res.status(200).json({

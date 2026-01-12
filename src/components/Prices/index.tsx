@@ -37,6 +37,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 export default function Prices() {
   const { data: session } = useSession();
   const { data: prices, mutate, error } = useSWR<Price[]>("/api/prices", fetcher);
+  const { data: user } = useSWR(session ? "/api/user" : null, fetcher);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   const [timeSinceUpdate, setTimeSinceUpdate] = useState<string>("Never");
@@ -44,9 +45,24 @@ export default function Prices() {
   const [lastSummary, setLastSummary] = useState<FetchSummary | null>(null);
   const [showDetails, setShowDetails] = useState<boolean>(false);
 
+  const userSymbols = useMemo(() => {
+    if (!user || !Array.isArray(user.assets)) return new Set<string>();
+    return new Set(
+      user.assets
+        .filter((a: any) => !a.isDeleted)
+        .map((a: any) => (a.abb || a.name || a.id || "").toString().toUpperCase())
+        .filter(Boolean)
+    );
+  }, [user]);
+
+  const filteredPrices = useMemo(() => {
+    if (!prices) return [];
+    return prices.filter((p) => userSymbols.has(p.symbol.toUpperCase()));
+  }, [prices, userSymbols]);
+
   const lastFetchTime = useMemo(() => {
-    if (!prices || prices.length === 0) return null;
-    const times = prices.map((p) => new Date(p.recordedAt || p.timestamp || 0));
+    if (!filteredPrices || filteredPrices.length === 0) return null;
+    const times = filteredPrices.map((p) => new Date(p.recordedAt || p.timestamp || 0));
     const max = new Date(
       Math.max.apply(
         null,
@@ -210,7 +226,7 @@ export default function Prices() {
             )}
           </div>
         )}
-        {Array.isArray(prices) && prices.length > 0 && (
+        {Array.isArray(filteredPrices) && filteredPrices.length > 0 && (
           <Table>
             <TableHeader>
               <TableRow>
@@ -222,7 +238,7 @@ export default function Prices() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {prices.map((p) => (
+              {filteredPrices.map((p) => (
                 <TableRow key={p.symbol}>
                   <TableCell>{p.symbol}</TableCell>
                   <TableCell className="text-right">{Number(p.value).toLocaleString("de-DE")}</TableCell>

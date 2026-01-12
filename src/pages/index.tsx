@@ -199,6 +199,7 @@ export default function App() {
 
           setAssets(updatedAssets);
           mutate("/api/user");
+          setApiRemaining(data.remainingCalls);
           toast({
             title: `Updated ${data.fetched} prices`,
             description: `${data.apiCalls} API calls • ${data.remainingCalls} calls remaining today`,
