@@ -7,7 +7,7 @@ import TotalValue from "@/components/TotalValue";
 import Login from "@/components/Login";
 import useSWR from "swr";
 import axios, { AxiosError } from "axios";
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 import AssetDialog from "@/components/AssetDialog";
 import { AssetType } from "@/components/Asset";
@@ -22,24 +22,7 @@ interface UserData {
 
 export default function App() {
   const { toast } = useToast();
-  const initialAssets: AssetType[] = [
-    { id: 0, name: "Bitcoin", quantity: 0.01, notes: "", type: "crypto", abb: "btc", value: 400, baseValue: 40_000, isDeleted: false },
-    { id: 1, name: "Ethereum", quantity: 1, notes: "", type: "crypto", abb: "eth", value: 4_000, baseValue: 4_000, isDeleted: false },
-    { id: 2, name: "Silver", quantity: 4, notes: "", type: "metals", abb: "silver", value: 100, baseValue: 20.7, isDeleted: false },
-    {
-      id: 3,
-      name: "Gold",
-      quantity: 0.5,
-      notes: "",
-      type: "metals",
-      abb: "gold",
-      value: 950,
-      baseValue: 1_900,
-      isDeleted: false,
-    },
-    { id: 4, name: "Euro", quantity: 200, notes: "under the Pillow", type: "cash", abb: "eur", value: 200, baseValue: 1, isDeleted: false },
-    { id: 5, name: "Beach house", quantity: 1, notes: "I wish", type: "real_estate", abb: "RE", value: 1, baseValue: 1, isDeleted: false },
-  ];
+  const initialAssets: AssetType[] = [];
   const [assets, setAssets] = useState<AssetType[]>(initialAssets);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Partial<AssetType> | null>(null);
@@ -242,24 +225,13 @@ export default function App() {
     setSelectedTypes((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
   };
 
-  const getSortedAssets = (assets: AssetType[]) => {
-    const sorted = [...assets];
-    switch (sortBy) {
-      case "value":
-        return sorted.sort((a, b) => (b.value || 0) - (a.value || 0));
-      case "name":
-        return sorted.sort((a, b) => a.name.localeCompare(b.name));
-      case "date":
-        // Neueste zuerst - Assets mit höherer ID oder _id sind neuer
-        return sorted.sort((a, b) => {
-          const idA = Number(a._id || a.id || 0);
-          const idB = Number(b._id || b.id || 0);
-          return idB - idA;
-        });
-      default:
-        return sorted;
-    }
-  };
+  const filteredAssets = assets
+    ? assets.filter((a) => {
+        const typeOk = selectedTypes.length ? selectedTypes.includes(a.type) : true;
+        const deletedOk = showDeleted ? true : !a.isDeleted;
+        return typeOk && deletedOk;
+      })
+    : [];
 
   if (isLoading) {
     return (
@@ -301,13 +273,19 @@ export default function App() {
         </div>
         {assets ? (
           <AssetList
-            assets={getSortedAssets(assets)}
-            showDeleted={showDeleted}
-            selectedTypes={selectedTypes}
+            assets={filteredAssets}
+            sortBy={sortBy}
             handleDeleteAsset={handleDeleteAsset}
             handleUnDeleteAsset={handleUnDeleteAsset}
             handleEditAsset={handleEditAsset}
           ></AssetList>
+        ) : assets.length === 0 && user ? (
+          <div className="flex items-center justify-center min-h-[200px]">
+            <div className="flex flex-col items-center gap-4">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+              <p className="text-lg text-muted-foreground">Loading your assets...</p>
+            </div>
+          </div>
         ) : (
           "Please add assets!"
         )}
