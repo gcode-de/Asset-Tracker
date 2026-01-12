@@ -28,7 +28,7 @@ export default function App() {
   const [editingAsset, setEditingAsset] = useState<Partial<AssetType> | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-  const [sortBy, setSortBy] = useState<"value" | "name" | "date">("date");
+  const [sortBy, setSortBy] = useState<"value" | "name" | "date">("value");
   const [apiRemaining, setApiRemaining] = useState<number>(25);
 
   const apiClient = axios.create({
