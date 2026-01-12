@@ -53,7 +53,7 @@ export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handl
   const assetId = asset._id ?? asset.id;
 
   return (
-    <Card id={String(assetId)} className="overflow-hidden h-full flex flex-col">
+    <Card id={String(assetId)} className={`overflow-hidden h-full flex flex-col ${asset.isDeleted ? "opacity-50" : ""}`}>
       <div className="relative h-24 w-full bg-cover bg-center" style={{ backgroundImage: bgForType(asset.type) }} aria-hidden>
         <div className="absolute inset-0 bg-black/20" />
       </div>
