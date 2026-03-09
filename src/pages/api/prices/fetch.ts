@@ -108,195 +108,198 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Remove old index if exists (migration for schema change)
     try {
-      await ApiCounter.collection.dropIndex('date_1');
+      await ApiCounter.collection.dropIndex("date_1");
     } catch (e) {
       // Index might not exist, ignore
     }
 
     const { symbol: requestedSymbol } = req.body || {};
-  const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
+    const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
 
-  // Hash the API key for storage
-  const apiKeyHash = crypto.createHash('sha256').update(ALPHA_KEY || '').digest('hex');
+    // Hash the API key for storage
+    const apiKeyHash = crypto
+      .createHash("sha256")
+      .update(ALPHA_KEY || "")
+      .digest("hex");
 
-  // Get or create today's counter for this API key
-  const existingCounter = await findOneDoc(ApiCounter, { date: today, apiKey: apiKeyHash });
-  let counter = existingCounter;
-  if (!counter) {
-    counter = await createDoc(ApiCounter, { date: today, apiKey: apiKeyHash, count: 0, limit: 25 });
-  }
+    // Get or create today's counter for this API key
+    const existingCounter = await findOneDoc(ApiCounter, { date: today, apiKey: apiKeyHash });
+    let counter = existingCounter;
+    if (!counter) {
+      counter = await createDoc(ApiCounter, { date: today, apiKey: apiKeyHash, count: 0, limit: 25 });
+    }
 
-  // Check if we've hit the limit
-  if (counter.count >= counter.limit) {
-    return res.status(429).json({
-      error: "API limit reached for today",
-      count: counter.count,
-      limit: counter.limit,
-    });
-  }
-
-  // Find current user and collect unique asset symbols
-  const userEmail = session?.user?.email;
-  if (!userEmail) {
-    return res.status(400).json({ error: "User email not available in session" });
-  }
-
-  const currentUser = await User.findOne({ email: userEmail });
-  if (!currentUser) {
-    return res.status(404).json({ error: "User not found" });
-  }
-
-  const assetMap = new Map<string, { symbol: string; type: string }>();
-  const assets = Array.isArray(currentUser.assets) ? currentUser.assets : [];
-  for (const asset of assets) {
-    // Skip soft-deleted assets
-    if ((asset as any).isDeleted) continue;
-    const symbol = (asset.abb || asset.name || asset.id || "").toString().toUpperCase();
-    if (!symbol) continue;
-
-    const type = (asset.type || "").toLowerCase();
-    // Skip unsupported categories entirely
-    const unsupported = new Set(["commodity", "commodities", "cash", "real_estate", "realestate", "property"]);
-    if (unsupported.has(type)) continue;
-
-    // Store unique symbols with their type
-    if (!assetMap.has(symbol)) {
-      assetMap.set(symbol, {
-        symbol,
-        type,
+    // Check if we've hit the limit
+    if (counter.count >= counter.limit) {
+      return res.status(429).json({
+        error: "API limit reached for today",
+        count: counter.count,
+        limit: counter.limit,
       });
     }
-  }
 
-  const uniqueAssets = Array.from(assetMap.values());
-
-  // If a specific symbol is requested, filter to only that one
-  let filteredAssets = uniqueAssets;
-  if (requestedSymbol) {
-    const reqSym = requestedSymbol.toString().toUpperCase();
-    filteredAssets = uniqueAssets.filter(a => a.symbol === reqSym);
-    if (filteredAssets.length === 0) {
-      return res.status(404).json({ error: `Asset with symbol ${reqSym} not found` });
+    // Find current user and collect unique asset symbols
+    const userEmail = session?.user?.email;
+    if (!userEmail) {
+      return res.status(400).json({ error: "User email not available in session" });
     }
-  }
 
-  // Sort assets by oldest price update first (only if fetching all)
-  if (!requestedSymbol) {
-    const symbols = filteredAssets.map(a => a.symbol);
-    const existingPrices = await Price.find({ symbol: { $in: symbols } }).sort({ timestamp: 1 }); // oldest first
-    const priceMap = new Map(existingPrices.map(p => [p.symbol, p.timestamp]));
-    filteredAssets.sort((a, b) => {
-      const aTime = priceMap.get(a.symbol)?.getTime() || 0;
-      const bTime = priceMap.get(b.symbol)?.getTime() || 0;
-      return aTime - bTime; // oldest first
-    });
-  }
+    const currentUser = await User.findOne({ email: userEmail });
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-  const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
+    const assetMap = new Map<string, { symbol: string; type: string }>();
+    const assets = Array.isArray(currentUser.assets) ? currentUser.assets : [];
+    for (const asset of assets) {
+      // Skip soft-deleted assets
+      if ((asset as any).isDeleted) continue;
+      const symbol = (asset.abb || asset.name || asset.id || "").toString().toUpperCase();
+      if (!symbol) continue;
 
-  if (!ALPHA_KEY) {
-    return res.status(500).json({ error: "AlphaVantage API key not configured (ALPHAVANTAGE_KEY)" });
-  }
+      const type = (asset.type || "").toLowerCase();
+      // Skip unsupported categories entirely
+      const unsupported = new Set(["commodity", "commodities", "cash", "real_estate", "realestate", "property"]);
+      if (unsupported.has(type)) continue;
 
-  let apiCallCount = 0;
-  const fxCache = new Map<string, number>(); // from->EUR rate
+      // Store unique symbols with their type
+      if (!assetMap.has(symbol)) {
+        assetMap.set(symbol, {
+          symbol,
+          type,
+        });
+      }
+    }
 
-  async function getFxToEUR(from: string): Promise<number> {
-    const cur = (from || "").toUpperCase();
-    if (cur === "EUR") return 1;
-    if (fxCache.has(cur)) return fxCache.get(cur)!;
-    const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
-      cur,
-    )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-    ensureAlphaNotThrottled(data);
-    const rateStr = data?.["Realtime Currency Exchange Rate"]?.["5. Exchange Rate"];
-    if (!rateStr) throw new Error(`FX rate not available for ${cur}->EUR`);
-    const rate = Number(rateStr);
-    if (Number.isNaN(rate)) throw new Error(`Invalid FX rate string: "${rateStr}" for ${cur}->EUR`);
-    fxCache.set(cur, rate);
-    apiCallCount++;
-    await delay(1000); // AlphaVantage: 1 request per second
-    return rate;
-  }
+    const uniqueAssets = Array.from(assetMap.values());
 
-  for (const asset of filteredAssets) {
-    const { symbol } = asset;
-    let type = (asset.type || "").toLowerCase();
+    // If a specific symbol is requested, filter to only that one
+    let filteredAssets = uniqueAssets;
+    if (requestedSymbol) {
+      const reqSym = requestedSymbol.toString().toUpperCase();
+      filteredAssets = uniqueAssets.filter((a) => a.symbol === reqSym);
+      if (filteredAssets.length === 0) {
+        return res.status(404).json({ error: `Asset with symbol ${reqSym} not found` });
+      }
+    }
 
-    // Normalize some common types
-    if (type === "etf" || type === "fund") type = "stock";
+    // Sort assets by oldest price update first (only if fetching all)
+    if (!requestedSymbol) {
+      const symbols = filteredAssets.map((a) => a.symbol);
+      const existingPrices = await Price.find({ symbol: { $in: symbols } }).sort({ timestamp: 1 }); // oldest first
+      const priceMap = new Map(existingPrices.map((p) => [p.symbol, p.timestamp]));
+      filteredAssets.sort((a, b) => {
+        const aTime = priceMap.get(a.symbol)?.getTime() || 0;
+        const bTime = priceMap.get(b.symbol)?.getTime() || 0;
+        return aTime - bTime; // oldest first
+      });
+    }
 
-    try {
-      let fetched: FetchResult | null = null;
+    const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
 
-      if (type === "crypto") {
-        fetched = await fetchCryptoToEUR(symbol);
-        apiCallCount++; // Increment for each API call
-      } else if (type === "stocks" || type === "stock") {
-        fetched = await fetchStock(symbol);
-        apiCallCount++; // Increment for each API call
-        // Convert non-EUR quotes to EUR for consistency
-        if (fetched && fetched.currency && fetched.currency !== "EUR") {
-          const rate = await getFxToEUR(fetched.currency);
-          fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };
-        }
-      } else {
-        // Heuristic: only for unknown types, try stock API if symbol looks like a ticker
-        if (/^[A-Z0-9\.-]+$/i.test(symbol)) {
+    if (!ALPHA_KEY) {
+      return res.status(500).json({ error: "AlphaVantage API key not configured (ALPHAVANTAGE_KEY)" });
+    }
+
+    let apiCallCount = 0;
+    const fxCache = new Map<string, number>(); // from->EUR rate
+
+    async function getFxToEUR(from: string): Promise<number> {
+      const cur = (from || "").toUpperCase();
+      if (cur === "EUR") return 1;
+      if (fxCache.has(cur)) return fxCache.get(cur)!;
+      const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
+        cur,
+      )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      ensureAlphaNotThrottled(data);
+      const rateStr = data?.["Realtime Currency Exchange Rate"]?.["5. Exchange Rate"];
+      if (!rateStr) throw new Error(`FX rate not available for ${cur}->EUR`);
+      const rate = Number(rateStr);
+      if (Number.isNaN(rate)) throw new Error(`Invalid FX rate string: "${rateStr}" for ${cur}->EUR`);
+      fxCache.set(cur, rate);
+      apiCallCount++;
+      await delay(1000); // AlphaVantage: 1 request per second
+      return rate;
+    }
+
+    for (const asset of filteredAssets) {
+      const { symbol } = asset;
+      let type = (asset.type || "").toLowerCase();
+
+      // Normalize some common types
+      if (type === "etf" || type === "fund") type = "stock";
+
+      try {
+        let fetched: FetchResult | null = null;
+
+        if (type === "crypto") {
+          fetched = await fetchCryptoToEUR(symbol);
+          apiCallCount++; // Increment for each API call
+        } else if (type === "stocks" || type === "stock") {
           fetched = await fetchStock(symbol);
           apiCallCount++; // Increment for each API call
+          // Convert non-EUR quotes to EUR for consistency
           if (fetched && fetched.currency && fetched.currency !== "EUR") {
             const rate = await getFxToEUR(fetched.currency);
             fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };
           }
         } else {
-          // skip unsupported types (metals, real_estate, cash)
+          // Heuristic: only for unknown types, try stock API if symbol looks like a ticker
+          if (/^[A-Z0-9\.-]+$/i.test(symbol)) {
+            fetched = await fetchStock(symbol);
+            apiCallCount++; // Increment for each API call
+            if (fetched && fetched.currency && fetched.currency !== "EUR") {
+              const rate = await getFxToEUR(fetched.currency);
+              fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };
+            }
+          } else {
+            // skip unsupported types (metals, real_estate, cash)
+            continue;
+          }
+        }
+
+        if (!fetched) {
+          results.push({ symbol, ok: false, reason: "no data" });
           continue;
         }
-      }
 
-      if (!fetched) {
-        results.push({ symbol, ok: false, reason: "no data" });
-        continue;
-      }
+        // Upsert: Update existing or create new price entry (no duplicates!)
+        const doc = await Price.findOneAndUpdate(
+          { symbol }, // Find by symbol
+          {
+            symbol,
+            value: fetched.value,
+            currency: fetched.currency || "USD",
+            timestamp: new Date(),
+            source: "alphavantage",
+          },
+          { upsert: true, new: true }, // Create if doesn't exist, return new doc
+        );
 
-      // Upsert: Update existing or create new price entry (no duplicates!)
-      const doc = await Price.findOneAndUpdate(
-        { symbol }, // Find by symbol
-        {
-          symbol,
-          value: fetched.value,
-          currency: fetched.currency || "USD",
-          timestamp: new Date(),
-          source: "alphavantage",
-        },
-        { upsert: true, new: true }, // Create if doesn't exist, return new doc
-      );
-
-      results.push({ symbol, ok: true, price: doc });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      results.push({ symbol, ok: false, reason: message });
-      // If we hit AlphaVantage throttle, stop further requests to save remaining calls
-      if ((e as any)?.code === "ALPHA_RATE_LIMIT" || String(message).startsWith("ALPHA_RATE_LIMIT")) {
-        break;
+        results.push({ symbol, ok: true, price: doc });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        results.push({ symbol, ok: false, reason: message });
+        // If we hit AlphaVantage throttle, stop further requests to save remaining calls
+        if ((e as any)?.code === "ALPHA_RATE_LIMIT" || String(message).startsWith("ALPHA_RATE_LIMIT")) {
+          break;
+        }
       }
     }
-  }
 
-  // Update counter in DB
-  if (apiCallCount > 0) {
-    await ApiCounter.updateOne({ date: today, apiKey: apiKeyHash }, { $inc: { count: apiCallCount } }, { upsert: true });
-  }
+    // Update counter in DB
+    if (apiCallCount > 0) {
+      await ApiCounter.updateOne({ date: today, apiKey: apiKeyHash }, { $inc: { count: apiCallCount } }, { upsert: true });
+    }
 
-  return res.status(200).json({
-    fetched: results.filter((r) => r.ok).length,
-    total: results.length,
-    apiCalls: apiCallCount,
-    remainingCalls: Math.max(0, counter.limit - (counter.count + apiCallCount)),
-    results,
+    return res.status(200).json({
+      fetched: results.filter((r) => r.ok).length,
+      total: results.length,
+      apiCalls: apiCallCount,
+      remainingCalls: Math.max(0, counter.limit - (counter.count + apiCallCount)),
+      results,
     });
   } catch (error) {
     console.error("Error in /api/prices/fetch:", error);

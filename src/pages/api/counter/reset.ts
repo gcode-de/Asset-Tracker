@@ -21,20 +21,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Remove old index if exists (migration for schema change)
     try {
-      await ApiCounter.collection.dropIndex('date_1');
+      await ApiCounter.collection.dropIndex("date_1");
     } catch (e) {
       // Index might not exist, ignore
     }
 
     const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
-    const apiKeyHash = crypto.createHash('sha256').update(ALPHA_KEY || '').digest('hex');
+    const apiKeyHash = crypto
+      .createHash("sha256")
+      .update(ALPHA_KEY || "")
+      .digest("hex");
 
     // Reset the counter for today
-    await ApiCounter.updateOne(
-      { date: today, apiKey: apiKeyHash },
-      { count: 0 },
-      { upsert: true }
-    );
+    await ApiCounter.updateOne({ date: today, apiKey: apiKeyHash }, { count: 0 }, { upsert: true });
 
     return res.status(200).json({ message: "Counter reset successfully" });
   } catch (error) {

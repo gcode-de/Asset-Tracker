@@ -17,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Remove old index if exists (migration for schema change)
     try {
-      await ApiCounter.collection.dropIndex('date_1');
+      await ApiCounter.collection.dropIndex("date_1");
     } catch (e) {
       // Index might not exist, ignore
     }
@@ -25,7 +25,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
 
     // Hash the API key
-    const apiKeyHash = crypto.createHash('sha256').update(ALPHA_KEY || '').digest('hex');
+    const apiKeyHash = crypto
+      .createHash("sha256")
+      .update(ALPHA_KEY || "")
+      .digest("hex");
 
     let counter = await findOneDoc(ApiCounter, { date: today, apiKey: apiKeyHash });
     if (!counter) {

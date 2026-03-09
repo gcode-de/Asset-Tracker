@@ -19,7 +19,7 @@ const apiCounterSchema = new Schema<IApiCounter>(
     count: { type: Number, default: 0 },
     limit: { type: Number, default: 25 },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Compound unique index on date and apiKey

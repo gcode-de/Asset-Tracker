@@ -56,7 +56,7 @@ export default function App() {
         if (Array.isArray(pricesData)) {
           // Create price map with value and timestamp
           const priceMap = new Map(
-            pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), { value: p.value, updatedAt: p.recordedAt || p.timestamp }])
+            pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), { value: p.value, updatedAt: p.recordedAt || p.timestamp }]),
           );
 
           // Update assets with baseValue and priceUpdatedAt from prices
@@ -223,7 +223,7 @@ export default function App() {
 
         if (Array.isArray(pricesData)) {
           const priceMap = new Map(
-            pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), { value: p.value, updatedAt: p.recordedAt || p.timestamp }])
+            pricesData.map((p: any) => [String(p.symbol || "").toUpperCase(), { value: p.value, updatedAt: p.recordedAt || p.timestamp }]),
           );
 
           const updatedAssets = assets.map((asset: AssetType) => {

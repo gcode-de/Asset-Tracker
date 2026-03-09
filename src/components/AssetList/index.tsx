@@ -10,7 +10,14 @@ interface AssetListProps {
   sortBy?: "value" | "name" | "date";
 }
 
-export default function AssetList({ assets, handleEditAsset, handleDeleteAsset, handleUnDeleteAsset, handleUpdatePrice, sortBy = "date" }: AssetListProps) {
+export default function AssetList({
+  assets,
+  handleEditAsset,
+  handleDeleteAsset,
+  handleUnDeleteAsset,
+  handleUpdatePrice,
+  sortBy = "date",
+}: AssetListProps) {
   const sortedAssets = useMemo(() => {
     const sorted = [...assets];
     switch (sortBy) {
