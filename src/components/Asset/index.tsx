@@ -1,7 +1,7 @@
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Coins, TrendingUp, Calendar, Wallet } from "lucide-react";
+import { Coins, TrendingUp, Calendar, Wallet, RefreshCw } from "lucide-react";
 
 export interface AssetType {
   _id?: string | number;
@@ -22,9 +22,10 @@ interface AssetProps {
   handleEditAsset: (id: string | number) => void;
   handleDeleteAsset?: (id: string | number) => void;
   handleUnDeleteAsset?: (id: string | number) => void;
+  handleUpdatePrice?: (symbol: string) => void;
 }
 
-export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handleUnDeleteAsset }: AssetProps) {
+export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handleUnDeleteAsset, handleUpdatePrice }: AssetProps) {
   const bgForType = (type: string): string => {
     const key = (type ?? "")
       .toString()
@@ -118,10 +119,24 @@ export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handl
           <Button id={`${asset.id}-restore-button`} variant="secondary" size="sm" onClick={() => handleUnDeleteAsset && handleUnDeleteAsset(assetId)}>
             Restore
           </Button>
-        ) : null}
-        <Button id={`${asset.id}-edit-button`} variant="link" size="sm" onClick={() => handleEditAsset(assetId)}>
-          edit
-        </Button>
+        ) : (
+          <>
+            {handleUpdatePrice && (
+              <Button
+                id={`${asset.id}-update-button`}
+                variant="ghost"
+                size="sm"
+                onClick={() => handleUpdatePrice(asset.abb || asset.name || String(assetId))}
+                title="Update price"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            )}
+            <Button id={`${asset.id}-edit-button`} variant="link" size="sm" onClick={() => handleEditAsset(assetId)}>
+              edit
+            </Button>
+          </>
+        )}
       </CardFooter>
     </Card>
   );

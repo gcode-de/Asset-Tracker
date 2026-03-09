@@ -13,6 +13,7 @@ import AssetDialog from "@/components/AssetDialog";
 import { AssetType } from "@/components/Asset";
 import Prices from "@/components/Prices";
 import ApiLimitBadge from "@/components/ApiLimitBadge";
+import { useSession } from "next-auth/react";
 
 interface UserData {
   _id: string;
@@ -22,6 +23,7 @@ interface UserData {
 
 export default function App() {
   const { toast } = useToast();
+  const { data: session } = useSession();
   const initialAssets: AssetType[] = [];
   const [assets, setAssets] = useState<AssetType[]>(initialAssets);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -148,6 +150,46 @@ export default function App() {
     const asset = (assets || []).find((a) => a._id === id || a.id === id);
     setEditingAsset(asset || null);
     setDialogOpen(true);
+  }
+
+  async function handleUpdatePrice(symbol: string) {
+    if (!session) {
+      toast({ title: "Sign in to update price" });
+      return;
+    }
+    try {
+      const resp = await fetch("/api/prices/fetch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ symbol }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error || "Update failed");
+
+      if (resp.status === 429) {
+        toast({
+          title: "API Limit Reached",
+          description: "Free tier is limited to 25 calls per day",
+          variant: "destructive",
+        });
+      } else {
+        const fetched = data.fetched;
+        if (fetched > 0) {
+          toast({ title: `Updated price for ${symbol}` });
+        } else {
+          // Check if there's a specific error reason
+          const result = data.results?.[0];
+          const reason = result?.reason || "No price found";
+          toast({ title: `Failed to update ${symbol}: ${reason}`, variant: "destructive" });
+        }
+      }
+      // Refresh assets
+      mutate("/api/user");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Update failed";
+      toast({ title: message, variant: "destructive" });
+    }
   }
 
   function handleAddAsset(prefillType?: string) {
@@ -280,6 +322,7 @@ export default function App() {
             handleDeleteAsset={handleDeleteAsset}
             handleUnDeleteAsset={handleUnDeleteAsset}
             handleEditAsset={handleEditAsset}
+            handleUpdatePrice={handleUpdatePrice}
           ></AssetList>
         ) : assets.length === 0 && user ? (
           <div className="flex items-center justify-center min-h-[200px]">

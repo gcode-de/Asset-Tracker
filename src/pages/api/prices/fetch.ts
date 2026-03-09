@@ -6,6 +6,7 @@ import { findOneDoc, createDoc, findOneAndUpdateDoc } from "@/db/utils";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
+import crypto from "crypto";
 
 const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY || process.env.NEXT_PUBLIC_ALPHAVANTAGE;
 
@@ -77,7 +78,7 @@ async function fetchStock(symbol: string): Promise<FetchResult | null> {
 
 async function fetchCryptoToEUR(symbol: string): Promise<FetchResult | null> {
   const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
-    symbol
+    symbol,
   )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
   const resp = await fetch(url);
   const data = await resp.json();
@@ -99,19 +100,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const session = await getServerSession(req, res, authOptions);
+    if (!session) return res.status(401).json({ error: "Unauthorized" });
 
-  await dbConnect();
+    await dbConnect();
 
-  // Get today's date for counter
+    // Remove old index if exists (migration for schema change)
+    try {
+      await ApiCounter.collection.dropIndex('date_1');
+    } catch (e) {
+      // Index might not exist, ignore
+    }
+
+    const { symbol: requestedSymbol } = req.body || {};
   const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
 
-  // Get or create today's counter
-  const existingCounter = await findOneDoc(ApiCounter, { date: today });
+  // Hash the API key for storage
+  const apiKeyHash = crypto.createHash('sha256').update(ALPHA_KEY || '').digest('hex');
+
+  // Get or create today's counter for this API key
+  const existingCounter = await findOneDoc(ApiCounter, { date: today, apiKey: apiKeyHash });
   let counter = existingCounter;
   if (!counter) {
-    counter = await createDoc(ApiCounter, { date: today, count: 0, limit: 25 });
+    counter = await createDoc(ApiCounter, { date: today, apiKey: apiKeyHash, count: 0, limit: 25 });
   }
 
   // Check if we've hit the limit
@@ -158,15 +170,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const uniqueAssets = Array.from(assetMap.values());
 
-  // Sort assets by oldest price update first
-  const symbols = uniqueAssets.map(a => a.symbol);
-  const existingPrices = await Price.find({ symbol: { $in: symbols } }).sort({ timestamp: 1 }); // oldest first
-  const priceMap = new Map(existingPrices.map(p => [p.symbol, p.timestamp]));
-  uniqueAssets.sort((a, b) => {
-    const aTime = priceMap.get(a.symbol)?.getTime() || 0;
-    const bTime = priceMap.get(b.symbol)?.getTime() || 0;
-    return aTime - bTime; // oldest first
-  });
+  // If a specific symbol is requested, filter to only that one
+  let filteredAssets = uniqueAssets;
+  if (requestedSymbol) {
+    const reqSym = requestedSymbol.toString().toUpperCase();
+    filteredAssets = uniqueAssets.filter(a => a.symbol === reqSym);
+    if (filteredAssets.length === 0) {
+      return res.status(404).json({ error: `Asset with symbol ${reqSym} not found` });
+    }
+  }
+
+  // Sort assets by oldest price update first (only if fetching all)
+  if (!requestedSymbol) {
+    const symbols = filteredAssets.map(a => a.symbol);
+    const existingPrices = await Price.find({ symbol: { $in: symbols } }).sort({ timestamp: 1 }); // oldest first
+    const priceMap = new Map(existingPrices.map(p => [p.symbol, p.timestamp]));
+    filteredAssets.sort((a, b) => {
+      const aTime = priceMap.get(a.symbol)?.getTime() || 0;
+      const bTime = priceMap.get(b.symbol)?.getTime() || 0;
+      return aTime - bTime; // oldest first
+    });
+  }
 
   const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
 
@@ -182,7 +206,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (cur === "EUR") return 1;
     if (fxCache.has(cur)) return fxCache.get(cur)!;
     const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
-      cur
+      cur,
     )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
     const resp = await fetch(url);
     const data = await resp.json();
@@ -197,7 +221,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return rate;
   }
 
-  for (const asset of uniqueAssets) {
+  for (const asset of filteredAssets) {
     const { symbol } = asset;
     let type = (asset.type || "").toLowerCase();
 
@@ -248,7 +272,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           timestamp: new Date(),
           source: "alphavantage",
         },
-        { upsert: true, new: true } // Create if doesn't exist, return new doc
+        { upsert: true, new: true }, // Create if doesn't exist, return new doc
       );
 
       results.push({ symbol, ok: true, price: doc });
@@ -264,7 +288,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Update counter in DB
   if (apiCallCount > 0) {
-    await ApiCounter.updateOne({ date: today }, { $inc: { count: apiCallCount } }, { upsert: true });
+    await ApiCounter.updateOne({ date: today, apiKey: apiKeyHash }, { $inc: { count: apiCallCount } }, { upsert: true });
   }
 
   return res.status(200).json({
@@ -273,5 +297,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     apiCalls: apiCallCount,
     remainingCalls: Math.max(0, counter.limit - (counter.count + apiCallCount)),
     results,
-  });
+    });
+  } catch (error) {
+    console.error("Error in /api/prices/fetch:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: `Internal server error: ${errorMessage}` });
+  }
 }
