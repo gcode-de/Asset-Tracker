@@ -75,8 +75,10 @@ export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handl
             <div className="flex-1 min-w-0">
               <div className="text-xs text-muted-foreground">
                 Total Value{" "}
-                {asset.priceUpdatedAt && (
+                {asset.priceUpdatedAt ? (
                   <span>({new Date(asset.priceUpdatedAt).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" })})</span>
+                ) : (
+                  "(manual)"
                 )}
               </div>
               <div className="font-bold text-lg text-primary">{asset.value?.toLocaleString("de-DE")} €</div>
@@ -91,7 +93,7 @@ export default function Asset({ asset, handleEditAsset, handleDeleteAsset, handl
               <Coins className="h-4 w-4 text-muted-foreground mt-0.5 mr-1 flex-shrink-0" />
               <div className="text-xs text-muted-foreground">Units</div>
             </div>
-            <div className="font-semibold">{asset.quantity?.toLocaleString("de-DE")} €</div>
+            <div className="font-semibold">{asset.quantity?.toLocaleString("de-DE")}</div>
           </div>
 
           <div className="p-2 bg-muted/50 rounded-md">

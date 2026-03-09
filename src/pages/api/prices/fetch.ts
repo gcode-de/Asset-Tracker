@@ -65,10 +65,14 @@ async function fetchStock(symbol: string): Promise<FetchResult | null> {
   const data = await resp.json();
   ensureAlphaNotThrottled(data);
   const content = data?.["Global Quote"];
-  const price = content?.["05. price"];
-  if (!price) return null;
+  const priceStr = content?.["05. price"];
+  if (!priceStr) return null;
+  const price = Number(priceStr);
+  if (Number.isNaN(price)) {
+    throw new Error(`Invalid price string: "${priceStr}" for symbol ${norm}`);
+  }
   await delay(1000); // AlphaVantage: 1 request per second
-  return { value: Number(price), currency: inferCurrencyForStock(norm), raw: content };
+  return { value: price, currency: inferCurrencyForStock(norm), raw: content };
 }
 
 async function fetchCryptoToEUR(symbol: string): Promise<FetchResult | null> {
@@ -79,9 +83,14 @@ async function fetchCryptoToEUR(symbol: string): Promise<FetchResult | null> {
   const data = await resp.json();
   ensureAlphaNotThrottled(data);
   const content = data?.["Realtime Currency Exchange Rate"];
-  const rate = content?.["5. Exchange Rate"];
+  const rateStr = content?.["5. Exchange Rate"];
+  if (!rateStr) return null;
+  const rate = Number(rateStr);
+  if (Number.isNaN(rate)) {
+    throw new Error(`Invalid rate string: "${rateStr}" for crypto ${symbol}`);
+  }
   await delay(1000); // AlphaVantage: 1 request per second
-  return rate ? { value: Number(rate), currency: "EUR", raw: content } : null;
+  return { value: rate, currency: "EUR", raw: content };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -148,6 +157,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const uniqueAssets = Array.from(assetMap.values());
+
+  // Sort assets by oldest price update first
+  const symbols = uniqueAssets.map(a => a.symbol);
+  const existingPrices = await Price.find({ symbol: { $in: symbols } }).sort({ timestamp: 1 }); // oldest first
+  const priceMap = new Map(existingPrices.map(p => [p.symbol, p.timestamp]));
+  uniqueAssets.sort((a, b) => {
+    const aTime = priceMap.get(a.symbol)?.getTime() || 0;
+    const bTime = priceMap.get(b.symbol)?.getTime() || 0;
+    return aTime - bTime; // oldest first
+  });
+
   const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
 
   if (!ALPHA_KEY) {
@@ -168,8 +188,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const data = await resp.json();
     ensureAlphaNotThrottled(data);
     const rateStr = data?.["Realtime Currency Exchange Rate"]?.["5. Exchange Rate"];
-    const rate = rateStr ? Number(rateStr) : NaN;
-    if (!rate || Number.isNaN(rate)) throw new Error(`FX rate not available for ${cur}->EUR`);
+    if (!rateStr) throw new Error(`FX rate not available for ${cur}->EUR`);
+    const rate = Number(rateStr);
+    if (Number.isNaN(rate)) throw new Error(`Invalid FX rate string: "${rateStr}" for ${cur}->EUR`);
     fxCache.set(cur, rate);
     apiCallCount++;
     await delay(1000); // AlphaVantage: 1 request per second
