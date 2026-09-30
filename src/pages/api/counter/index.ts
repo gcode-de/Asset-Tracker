@@ -4,7 +4,7 @@ import { findOneDoc, createDoc } from "@/db/utils";
 import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 
-const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY || process.env.NEXT_PUBLIC_ALPHAVANTAGE;
+const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {

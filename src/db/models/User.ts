@@ -17,11 +17,20 @@ export interface IAsset {
   isDeleted: boolean;
 }
 
+export interface IUserAlphaVantageKey {
+  _id?: mongoose.Types.ObjectId;
+  encryptedKey: string;
+  maskedSuffix: string;
+  createdAt: Date;
+}
+
 export interface IUser extends Document {
   email: string;
   password: string;
   name?: string;
   assets: IAsset[];
+  alphaVantageKeys: IUserAlphaVantageKey[];
+  alphaVantageKeyCursor: number;
 }
 
 const assetSchema = new Schema<IAsset>(
@@ -40,6 +49,15 @@ const assetSchema = new Schema<IAsset>(
   { _id: false }
 );
 
+const alphaVantageKeySchema = new Schema<IUserAlphaVantageKey>(
+  {
+    encryptedKey: { type: String, required: true },
+    maskedSuffix: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true },
+);
+
 const userSchema = new Schema<IUser>({
   email: {
     type: String,
@@ -52,6 +70,8 @@ const userSchema = new Schema<IUser>({
   },
   name: String,
   assets: [assetSchema],
+  alphaVantageKeys: { type: [alphaVantageKeySchema], default: [] },
+  alphaVantageKeyCursor: { type: Number, default: 0 },
 });
 
 const User: Model<IUser> = mongoose.model<IUser>("User", userSchema);

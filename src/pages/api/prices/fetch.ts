@@ -8,8 +8,8 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 import { isRefreshableAssetType } from "@/lib/price-refresh";
+import { resolveAlphaVantageKey } from "@/lib/alpha-vantage-key-resolver";
 
-const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY || process.env.NEXT_PUBLIC_ALPHAVANTAGE;
 const ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS = 12_000;
 const ALPHA_VANTAGE_REQUEST_TIMEOUT_MS = 12_000;
 
@@ -62,9 +62,9 @@ function ensureAlphaNotThrottled(data: any) {
   }
 }
 
-async function fetchStock(symbol: string, reserveApiCall: () => Promise<() => Promise<void>>): Promise<FetchResult | null> {
+async function fetchStock(symbol: string, apiKey: string, reserveApiCall: () => Promise<() => Promise<void>>): Promise<FetchResult | null> {
   const norm = normalizeStockSymbol(symbol);
-  const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(norm)}&apikey=${ALPHA_KEY}`;
+  const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(norm)}&apikey=${apiKey}`;
   const releaseApiCall = await reserveApiCall();
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
@@ -83,10 +83,10 @@ async function fetchStock(symbol: string, reserveApiCall: () => Promise<() => Pr
   }
 }
 
-async function fetchCryptoToEUR(symbol: string, reserveApiCall: () => Promise<() => Promise<void>>): Promise<FetchResult | null> {
+async function fetchCryptoToEUR(symbol: string, apiKey: string, reserveApiCall: () => Promise<() => Promise<void>>): Promise<FetchResult | null> {
   const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
     symbol,
-  )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
+  )}&to_currency=EUR&apikey=${apiKey}`;
   const releaseApiCall = await reserveApiCall();
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
@@ -129,12 +129,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "A single asset symbol is required for price refresh" });
     }
     const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
+    const userEmail = session?.user?.email;
+    if (!userEmail) {
+      return res.status(400).json({ error: "User email not available in session" });
+    }
 
-    // Hash the API key for storage
-    const apiKeyHash = crypto
-      .createHash("sha256")
-      .update(ALPHA_KEY || "")
-      .digest("hex");
+    const currentUser = await User.findOne({ email: userEmail });
+    if (!currentUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const alphaVantage = await resolveAlphaVantageKey(userEmail);
+    const apiKeyHash = crypto.createHash("sha256").update(alphaVantage.key).digest("hex");
 
     // Atomically initialize today's counter before trying to reserve a provider call.
     const counter = await ApiCounter.findOneAndUpdate(
@@ -150,17 +156,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         count: counter.count,
         limit: counter.limit,
       });
-    }
-
-    // Find current user and collect unique asset symbols
-    const userEmail = session?.user?.email;
-    if (!userEmail) {
-      return res.status(400).json({ error: "User email not available in session" });
-    }
-
-    const currentUser = await User.findOne({ email: userEmail });
-    if (!currentUser) {
-      return res.status(404).json({ error: "User not found" });
     }
 
     const assetMap = new Map<string, { symbol: string; type: string }>();
@@ -208,10 +203,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
-
-    if (!ALPHA_KEY) {
-      return res.status(500).json({ error: "AlphaVantage API key not configured (ALPHAVANTAGE_KEY)" });
-    }
 
     let apiCallCount = 0;
     let remainingCalls = Math.max(0, counter.limit - counter.count);
@@ -267,7 +258,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (fxCache.has(cur)) return fxCache.get(cur)!;
       const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
         cur,
-      )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
+      )}&to_currency=EUR&apikey=${alphaVantage.key}`;
       const releaseApiCall = await reserveApiCall();
       try {
         const resp = await fetch(url, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
@@ -295,9 +286,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let fetched: FetchResult | null = null;
 
         if (type === "crypto") {
-          fetched = await fetchCryptoToEUR(symbol, reserveApiCall);
+          fetched = await fetchCryptoToEUR(symbol, alphaVantage.key, reserveApiCall);
         } else if (type === "stocks" || type === "stock") {
-          fetched = await fetchStock(symbol, reserveApiCall);
+          fetched = await fetchStock(symbol, alphaVantage.key, reserveApiCall);
           // Convert non-EUR quotes to EUR for consistency
           if (fetched && fetched.currency && fetched.currency !== "EUR") {
             const rate = await getFxToEUR(fetched.currency);
@@ -306,7 +297,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
           // Heuristic: only for unknown types, try stock API if symbol looks like a ticker
           if (/^[A-Z0-9\.-]+$/i.test(symbol)) {
-            fetched = await fetchStock(symbol, reserveApiCall);
+            fetched = await fetchStock(symbol, alphaVantage.key, reserveApiCall);
             if (fetched && fetched.currency && fetched.currency !== "EUR") {
               const rate = await getFxToEUR(fetched.currency);
               fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };

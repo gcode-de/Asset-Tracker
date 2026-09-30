@@ -2,6 +2,9 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 import dbConnect from "@/db/connect";
 import ApiCounter from "@/db/models/ApiCounter";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { resolveAlphaVantageKey } from "@/lib/alpha-vantage-key-resolver";
 
 const ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS = 12_000;
 const ALPHA_VANTAGE_REQUEST_TIMEOUT_MS = 12_000;
@@ -48,16 +51,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(400).json({ error: "Query parameter is required" });
   }
 
-  const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY;
-
-  if (!ALPHA_KEY) {
-    return res.status(500).json({ error: "AlphaVantage API key not configured" });
-  }
+  const session = await getServerSession(req, res, authOptions);
+  const email = session?.user?.email;
+  if (!email) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     await dbConnect();
+    const alphaVantage = await resolveAlphaVantageKey(email);
     const today = new Date().toISOString().split("T")[0];
-    const apiKeyHash = crypto.createHash("sha256").update(ALPHA_KEY).digest("hex");
+    const apiKeyHash = crypto.createHash("sha256").update(alphaVantage.key).digest("hex");
     const counter = await ApiCounter.findOneAndUpdate(
       { date: today, apiKey: apiKeyHash },
       { $setOnInsert: { date: today, apiKey: apiKeyHash, count: 0, limit: 25 } },
@@ -100,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       queryUpper.includes("CRYPTO");
 
     // Search stocks/ETFs
-    const stockUrl = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${encodeURIComponent(query)}&apikey=${ALPHA_KEY}`;
+    const stockUrl = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${encodeURIComponent(query)}&apikey=${alphaVantage.key}`;
     let stockData: any;
     try {
       const stockResponse = await fetch(stockUrl, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });

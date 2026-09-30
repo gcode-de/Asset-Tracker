@@ -26,9 +26,14 @@ export default async function handler(request: NextApiRequest, response: NextApi
   }
 
   switch (method) {
-    case "GET":
+    case "GET": {
       const userWithAssets = await User.findOne({ email: userEmail });
-      return response.status(200).json(userWithAssets);
+      if (!userWithAssets) return response.status(404).json({ error: "User not found" });
+      const user = typeof (userWithAssets as any).toObject === "function" ? (userWithAssets as any).toObject() : { ...userWithAssets };
+      delete user.alphaVantageKeys;
+      delete user.alphaVantageKeyCursor;
+      return response.status(200).json(user);
+    }
 
     case "POST":
       try {
