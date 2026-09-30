@@ -43,6 +43,20 @@ describe("/api/user/alpha-vantage-keys", () => {
     expect(JSON.stringify(res.body)).not.toContain("ciphertext");
   });
 
+  it.each([
+    [undefined, "ENCRYPTION_KEY_MISSING"],
+    ["short", "ENCRYPTION_KEY_INVALID"],
+  ])("reports safe configuration diagnostics for %s", async (secret, code) => {
+    if (secret === undefined) delete process.env.USER_API_TOKEN_ENCRYPTION_KEY;
+    else process.env.USER_API_TOKEN_ENCRYPTION_KEY = secret;
+    const res = response();
+    await handler({ method: "POST", body: { apiKey: "private-provider-token" } } as any, res as any);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual(expect.objectContaining({ code }));
+    expect(JSON.stringify(res.body)).not.toContain("private-provider-token");
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it("adds an encrypted key and returns only metadata", async () => {
     findOneAndUpdate.mockResolvedValue({
       alphaVantageKeys: [{ _id: "key-1", encryptedKey: "ciphertext", maskedSuffix: "••••abcd", createdAt: new Date("2026-09-30T00:00:00.000Z") }],

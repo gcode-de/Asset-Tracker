@@ -35,8 +35,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let encryptedKey: string;
     try {
       encryptedKey = encryptUserApiKey(apiKey);
-    } catch {
-      return res.status(500).json({ error: "Private API key storage is not configured" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message === "USER_API_TOKEN_ENCRYPTION_KEY must be configured") {
+        return res.status(500).json({
+          code: "ENCRYPTION_KEY_MISSING",
+          error: "USER_API_TOKEN_ENCRYPTION_KEY is missing in the running server function. Check the Production context and Functions scope, then redeploy.",
+        });
+      }
+      if (message.startsWith("USER_API_TOKEN_ENCRYPTION_KEY must be a 32-byte")) {
+        return res.status(500).json({
+          code: "ENCRYPTION_KEY_INVALID",
+          error: "USER_API_TOKEN_ENCRYPTION_KEY has an invalid format. Expected 64 hexadecimal characters or base64 encoding of 32 bytes.",
+        });
+      }
+      return res.status(500).json({ code: "ENCRYPTION_FAILED", error: "Private API key encryption failed. No key was saved." });
     }
 
     const user = await User.findOneAndUpdate(
