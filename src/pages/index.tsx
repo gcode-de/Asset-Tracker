@@ -20,6 +20,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { AlertCircle, ArrowRight, Database, RotateCcw, WalletCards } from "lucide-react";
+import { collectRefreshableSymbols, refreshSymbolsSequentially, type SymbolRefreshResult } from "@/lib/price-refresh";
 
 interface UserData {
   _id: string;
@@ -40,6 +41,7 @@ export default function App() {
   const [sortBy, setSortBy] = useState<"value" | "name" | "date">("value");
   const [apiRemaining, setApiRemaining] = useState(25);
   const [isSaving, setIsSaving] = useState(false);
+  const [priceRefreshVersion, setPriceRefreshVersion] = useState(0);
 
   const apiClient = useMemo(
     () => axios.create({ baseURL: "/api", headers: { "Content-Type": "application/json" } }),
@@ -81,7 +83,7 @@ export default function App() {
 
     loadPrices();
     return () => { cancelled = true; };
-  }, [demoMode, toast, user]);
+  }, [demoMode, priceRefreshVersion, toast, user]);
 
   const updateDemoAssets = (updater: (current: AssetType[]) => AssetType[]) => {
     setAssets((current) => {
@@ -161,6 +163,8 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || "Price update failed");
       toast({ title: data.fetched > 0 ? `${symbol} updated` : `No price found for ${symbol}` });
+      if (typeof data.remainingCalls === "number") setApiRemaining(data.remainingCalls);
+      setPriceRefreshVersion((version) => version + 1);
       mutate("/api/user");
     } catch (error) {
       toast({ title: "Price update failed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
@@ -182,11 +186,55 @@ export default function App() {
       toast({ title: "Demo prices refreshed", description: "Using the bundled, deterministic snapshot." });
       return;
     }
+    const symbols = collectRefreshableSymbols(assets);
+    if (symbols.length === 0) {
+      toast({ title: "No refreshable assets", description: "Stocks, ETFs and crypto with a symbol can be updated automatically." });
+      return;
+    }
+
     try {
-      const { data } = await apiClient.post("/prices/fetch");
-      setApiRemaining(data.remainingCalls);
+      const results = await refreshSymbolsSequentially({
+        symbols,
+        refreshSymbol: async (symbol): Promise<SymbolRefreshResult> => {
+          const response = await fetch("/api/prices/fetch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ symbol }),
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            if (response.status === 429) {
+              return { symbol, ok: false, reason: data?.error || "API limit reached", apiCalls: 0, remainingCalls: 0, terminal: true };
+            }
+            throw new Error(data?.error || "Price update failed");
+          }
+          const result = Array.isArray(data.results) ? data.results[0] : undefined;
+          return {
+            symbol,
+            ok: Boolean(result?.ok),
+            reason: result?.reason,
+            apiCalls: Number(data.apiCalls || 0),
+            remainingCalls: typeof data.remainingCalls === "number" ? data.remainingCalls : undefined,
+            terminal: /^(ALPHA_RATE_LIMIT|API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS)/.test(String(result?.reason || "")),
+          };
+        },
+        onResult: (result) => {
+          if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
+          if (result.ok) setPriceRefreshVersion((version) => version + 1);
+          toast(
+            result.ok
+              ? { title: `${result.symbol} updated`, description: `${result.apiCalls} API call${result.apiCalls === 1 ? "" : "s"} used` }
+              : { title: `${result.symbol} could not be updated`, description: result.reason || "No quote available", variant: "destructive" },
+          );
+        },
+      });
+      setPriceRefreshVersion((version) => version + 1);
       mutate("/api/user");
-      toast({ title: `${data.fetched} prices updated`, description: `${data.remainingCalls} calls remaining today` });
+      toast({ title: `${results.filter((result) => result.ok).length}/${results.length} assets updated` });
+      if (results.length < symbols.length) {
+        toast({ title: "Refresh stopped", description: `${symbols.length - results.length} asset${symbols.length - results.length === 1 ? "" : "s"} skipped because the provider is unavailable right now.`, variant: "destructive" });
+      }
     } catch (error) {
       toast({ title: "Prices could not be refreshed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
     }

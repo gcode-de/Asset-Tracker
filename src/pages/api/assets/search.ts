@@ -1,4 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import crypto from "crypto";
+import dbConnect from "@/db/connect";
+import ApiCounter from "@/db/models/ApiCounter";
+
+const ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS = 12_000;
+const ALPHA_VANTAGE_REQUEST_TIMEOUT_MS = 12_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface AlphaVantageSearchResult {
   "1. symbol": string;
@@ -38,13 +48,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(400).json({ error: "Query parameter is required" });
   }
 
-  const ALPHA_KEY = process.env.NEXT_PUBLIC_ALPHAVANTAGE || process.env.ALPHAVANTAGE_KEY;
+  const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY;
 
   if (!ALPHA_KEY) {
     return res.status(500).json({ error: "AlphaVantage API key not configured" });
   }
 
   try {
+    await dbConnect();
+    const today = new Date().toISOString().split("T")[0];
+    const apiKeyHash = crypto.createHash("sha256").update(ALPHA_KEY).digest("hex");
+    const counter = await ApiCounter.findOneAndUpdate(
+      { date: today, apiKey: apiKeyHash },
+      { $setOnInsert: { date: today, apiKey: apiKeyHash, count: 0, limit: 25 } },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+
+    const lockId = crypto.randomUUID();
+    const now = new Date();
+    const lockedCounter = await ApiCounter.findOneAndUpdate(
+      {
+        date: today,
+        apiKey: apiKeyHash,
+        count: { $lt: counter.limit },
+        $or: [{ refreshLockExpiresAt: { $exists: false } }, { refreshLockExpiresAt: { $lte: now } }],
+      },
+      { $inc: { count: 1 }, $set: { refreshLockId: lockId, refreshLockExpiresAt: new Date(now.getTime() + 30_000) } },
+      { new: true },
+    );
+    if (!lockedCounter) {
+      return res.status(429).json({ error: "Market data is busy or the daily limit has been reached" });
+    }
+
+    const lastProviderRequestAt = lockedCounter.lastProviderRequestAt?.getTime() || 0;
+    await delay(Math.max(0, lastProviderRequestAt + ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS - Date.now()));
+    await ApiCounter.updateOne(
+      { date: today, apiKey: apiKeyHash, refreshLockId: lockId },
+      { $set: { lastProviderRequestAt: new Date() } },
+    );
+
     // Common crypto symbols to search for
     const cryptoSymbols = ["BTC", "ETH", "BNB", "XRP", "ADA", "DOGE", "SOL", "MATIC", "DOT", "AVAX", "SHIB", "LTC", "UNI", "LINK", "XLM"];
     const queryUpper = query.toUpperCase();
@@ -59,8 +101,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     // Search stocks/ETFs
     const stockUrl = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${encodeURIComponent(query)}&apikey=${ALPHA_KEY}`;
-    const stockResponse = await fetch(stockUrl);
-    const stockData = await stockResponse.json();
+    let stockData: any;
+    try {
+      const stockResponse = await fetch(stockUrl, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
+      stockData = await stockResponse.json();
+    } finally {
+      await ApiCounter.updateOne(
+        { date: today, apiKey: apiKeyHash, refreshLockId: lockId },
+        { $unset: { refreshLockId: 1, refreshLockExpiresAt: 1 } },
+      );
+    }
 
     let matches: SearchMatch[] = [];
 
@@ -130,7 +180,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(200).json({ matches: matches.slice(0, 10), count: matches.length });
   } catch (error) {
     console.error("Asset search error:", error);
-    const message = error instanceof Error ? error.message : "Search failed";
-    return res.status(500).json({ error: message });
+    return res.status(500).json({ error: "Asset search failed. Please try again." });
   }
 }

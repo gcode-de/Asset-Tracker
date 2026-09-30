@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import ApiLimitBadge from "@/components/ApiLimitBadge";
 import { AlertCircle, Clock, RotateCcw } from "lucide-react";
+import { collectRefreshableSymbols, refreshSymbolsSequentially, type SymbolRefreshResult } from "@/lib/price-refresh";
 
 interface Price {
   symbol: string;
@@ -44,6 +45,7 @@ export default function Prices() {
   const [remaining, setRemaining] = useState<number>(25);
   const [lastSummary, setLastSummary] = useState<FetchSummary | null>(null);
   const [showDetails, setShowDetails] = useState<boolean>(false);
+  const [refreshProgress, setRefreshProgress] = useState<{ completed: number; total: number; symbol?: string } | null>(null);
 
   const userSymbols = useMemo(() => {
     if (!user || !Array.isArray(user.assets)) return new Set<string>();
@@ -59,6 +61,13 @@ export default function Prices() {
     if (!prices) return [];
     return prices.filter((p) => userSymbols.has(p.symbol.toUpperCase()));
   }, [prices, userSymbols]);
+
+  const refreshableSymbols = useMemo(() => {
+    const lastUpdatedBySymbol = new Map(
+      (prices || []).map((price) => [price.symbol.toUpperCase(), new Date(price.recordedAt || price.timestamp || 0)]),
+    );
+    return collectRefreshableSymbols(Array.isArray(user?.assets) ? user.assets : [], lastUpdatedBySymbol);
+  }, [prices, user]);
 
   const lastFetchTime = useMemo(() => {
     if (!filteredPrices || filteredPrices.length === 0) return null;
@@ -102,43 +111,78 @@ export default function Prices() {
     return () => clearInterval(interval);
   }, [lastFetchTime]);
 
+  const fetchOnePrice = async (symbol: string): Promise<SymbolRefreshResult> => {
+    const resp = await fetch("/api/prices/fetch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ symbol }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (resp.status === 429) {
+        return { symbol, ok: false, reason: data?.error || "API limit reached", apiCalls: 0, remainingCalls: 0, terminal: true };
+      }
+      throw new Error(data?.error || "Fetch failed");
+    }
+
+    const result = Array.isArray(data.results) ? data.results[0] : undefined;
+    return {
+      symbol,
+      ok: Boolean(result?.ok),
+      reason: result?.reason,
+      apiCalls: Number(data.apiCalls || 0),
+      remainingCalls: typeof data.remainingCalls === "number" ? data.remainingCalls : undefined,
+      terminal: /^(ALPHA_RATE_LIMIT|API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS)/.test(String(result?.reason || "")),
+    };
+  };
+
   const onFetchLatest = async () => {
     if (!session) {
       toast({ title: "Sign in to fetch prices" });
       return;
     }
+    if (refreshableSymbols.length === 0) {
+      toast({ title: "No refreshable assets", description: "Stocks, ETFs and crypto with a symbol can be updated automatically." });
+      return;
+    }
+
     try {
       setSaving(true);
-      const resp = await fetch("/api/prices/fetch", { method: "POST", credentials: "same-origin" });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error || "Fetch failed");
-
-      if (resp.status === 429) {
-        toast({
-          title: "API Limit Reached",
-          description: "Free tier is limited to 25 calls per day",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: `Fetched ${data.fetched} price${data.fetched !== 1 ? "s" : ""}`,
-          description: `${data.apiCalls} API calls • ${data.remainingCalls} calls remaining today`,
-        });
-      }
-      // Store last results for diagnostics
-      setLastSummary({
-        fetched: data.fetched,
-        total: data.total,
-        apiCalls: data.apiCalls,
-        remainingCalls: data.remainingCalls,
-        results: Array.isArray(data.results) ? data.results.map((r: any) => ({ symbol: r.symbol, ok: !!r.ok, reason: r.reason })) : [],
+      setRefreshProgress({ completed: 0, total: refreshableSymbols.length });
+      const results = await refreshSymbolsSequentially({
+        symbols: refreshableSymbols,
+        refreshSymbol: fetchOnePrice,
+        onResult: async (result, index, total) => {
+          setRefreshProgress({ completed: index + 1, total, symbol: result.symbol });
+          if (typeof result.remainingCalls === "number") setRemaining(result.remainingCalls);
+          toast(
+            result.ok
+              ? { title: `${result.symbol} updated`, description: `${result.apiCalls} API call${result.apiCalls === 1 ? "" : "s"} used` }
+              : { title: `${result.symbol} could not be updated`, description: result.reason || "No quote available", variant: "destructive" },
+          );
+          await mutate();
+        },
       });
-      await mutate();
+
+      const apiCalls = results.reduce((sum, result) => sum + result.apiCalls, 0);
+      const remainingCalls = [...results].reverse().find((result) => typeof result.remainingCalls === "number")?.remainingCalls ?? remaining;
+      setLastSummary({
+        fetched: results.filter((result) => result.ok).length,
+        total: results.length,
+        apiCalls,
+        remainingCalls,
+        results: results.map((result) => ({ symbol: result.symbol, ok: result.ok, reason: result.reason })),
+      });
+      if (results.length < refreshableSymbols.length) {
+        toast({ title: "Refresh stopped", description: `${refreshableSymbols.length - results.length} asset${refreshableSymbols.length - results.length === 1 ? "" : "s"} skipped because the provider is unavailable right now.`, variant: "destructive" });
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       toast({ title: message, variant: "destructive" });
     } finally {
       setSaving(false);
+      setRefreshProgress(null);
       mutate();
     }
   };
@@ -175,10 +219,10 @@ export default function Prices() {
         </div>
         <Button onClick={onFetchLatest} disabled={!session || saving || remaining <= 0} className="w-full">
           {saving ? (
-            lastSummary && lastSummary.total > 0 ? (
+            refreshProgress ? (
               <span className="flex items-center gap-2">
                 <RotateCcw className="h-4 w-4 animate-spin" />
-                Fetching assets... (0/{lastSummary.total})
+                Updating {refreshProgress.symbol ? `${refreshProgress.symbol} ` : ""}({refreshProgress.completed}/{refreshProgress.total})
               </span>
             ) : (
               <span className="flex items-center gap-2">

@@ -2,13 +2,16 @@ import dbConnect from "@/db/connect";
 import Price from "@/db/models/Price";
 import User from "@/db/models/User";
 import ApiCounter from "@/db/models/ApiCounter";
-import { findOneDoc, createDoc } from "@/db/utils";
+import { findOneDoc } from "@/db/utils";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
+import { isRefreshableAssetType } from "@/lib/price-refresh";
 
 const ALPHA_KEY = process.env.ALPHAVANTAGE_KEY || process.env.NEXT_PUBLIC_ALPHAVANTAGE;
+const ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS = 12_000;
+const ALPHA_VANTAGE_REQUEST_TIMEOUT_MS = 12_000;
 
 interface FetchResult {
   value: number;
@@ -59,39 +62,47 @@ function ensureAlphaNotThrottled(data: any) {
   }
 }
 
-async function fetchStock(symbol: string): Promise<FetchResult | null> {
+async function fetchStock(symbol: string, reserveApiCall: () => Promise<() => Promise<void>>): Promise<FetchResult | null> {
   const norm = normalizeStockSymbol(symbol);
   const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(norm)}&apikey=${ALPHA_KEY}`;
-  const resp = await fetch(url);
-  const data = await resp.json();
-  ensureAlphaNotThrottled(data);
-  const content = data?.["Global Quote"];
-  const priceStr = content?.["05. price"];
-  if (!priceStr) return null;
-  const price = Number(priceStr);
-  if (Number.isNaN(price)) {
-    throw new Error(`Invalid price string: "${priceStr}" for symbol ${norm}`);
+  const releaseApiCall = await reserveApiCall();
+  try {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
+    const data = await resp.json();
+    ensureAlphaNotThrottled(data);
+    const content = data?.["Global Quote"];
+    const priceStr = content?.["05. price"];
+    if (!priceStr) return null;
+    const price = Number(priceStr);
+    if (Number.isNaN(price)) {
+      throw new Error(`Invalid price string: "${priceStr}" for symbol ${norm}`);
+    }
+    return { value: price, currency: inferCurrencyForStock(norm), raw: content };
+  } finally {
+    await releaseApiCall();
   }
-  await delay(1000); // AlphaVantage: 1 request per second
-  return { value: price, currency: inferCurrencyForStock(norm), raw: content };
 }
 
-async function fetchCryptoToEUR(symbol: string): Promise<FetchResult | null> {
+async function fetchCryptoToEUR(symbol: string, reserveApiCall: () => Promise<() => Promise<void>>): Promise<FetchResult | null> {
   const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
     symbol,
   )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
-  const resp = await fetch(url);
-  const data = await resp.json();
-  ensureAlphaNotThrottled(data);
-  const content = data?.["Realtime Currency Exchange Rate"];
-  const rateStr = content?.["5. Exchange Rate"];
-  if (!rateStr) return null;
-  const rate = Number(rateStr);
-  if (Number.isNaN(rate)) {
-    throw new Error(`Invalid rate string: "${rateStr}" for crypto ${symbol}`);
+  const releaseApiCall = await reserveApiCall();
+  try {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
+    const data = await resp.json();
+    ensureAlphaNotThrottled(data);
+    const content = data?.["Realtime Currency Exchange Rate"];
+    const rateStr = content?.["5. Exchange Rate"];
+    if (!rateStr) return null;
+    const rate = Number(rateStr);
+    if (Number.isNaN(rate)) {
+      throw new Error(`Invalid rate string: "${rateStr}" for crypto ${symbol}`);
+    }
+    return { value: rate, currency: "EUR", raw: content };
+  } finally {
+    await releaseApiCall();
   }
-  await delay(1000); // AlphaVantage: 1 request per second
-  return { value: rate, currency: "EUR", raw: content };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -114,6 +125,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { symbol: requestedSymbol } = req.body || {};
+    if (!requestedSymbol) {
+      return res.status(400).json({ error: "A single asset symbol is required for price refresh" });
+    }
     const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
 
     // Hash the API key for storage
@@ -122,12 +136,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .update(ALPHA_KEY || "")
       .digest("hex");
 
-    // Get or create today's counter for this API key
-    const existingCounter = await findOneDoc(ApiCounter, { date: today, apiKey: apiKeyHash });
-    let counter = existingCounter;
-    if (!counter) {
-      counter = await createDoc(ApiCounter, { date: today, apiKey: apiKeyHash, count: 0, limit: 25 });
-    }
+    // Atomically initialize today's counter before trying to reserve a provider call.
+    const counter = await ApiCounter.findOneAndUpdate(
+      { date: today, apiKey: apiKeyHash },
+      { $setOnInsert: { date: today, apiKey: apiKeyHash, count: 0, limit: 25 } },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
 
     // Check if we've hit the limit
     if (counter.count >= counter.limit) {
@@ -158,9 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!symbol) continue;
 
       const type = (asset.type || "").toLowerCase();
-      // Skip unsupported categories entirely
-      const unsupported = new Set(["commodity", "commodities", "cash", "real_estate", "realestate", "property"]);
-      if (unsupported.has(type)) continue;
+      if (!isRefreshableAssetType(type)) continue;
 
       // Store unique symbols with their type
       if (!assetMap.has(symbol)) {
@@ -202,7 +214,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     let apiCallCount = 0;
+    let remainingCalls = Math.max(0, counter.limit - counter.count);
     const fxCache = new Map<string, number>(); // from->EUR rate
+
+    async function reserveApiCall(): Promise<() => Promise<void>> {
+      const lockId = crypto.randomUUID();
+      const now = new Date();
+      const updatedCounter = await ApiCounter.findOneAndUpdate(
+        {
+          date: today,
+          apiKey: apiKeyHash,
+          count: { $lt: counter.limit },
+          $or: [
+            { refreshLockExpiresAt: { $exists: false } },
+            { refreshLockExpiresAt: { $lte: now } },
+          ],
+        },
+        {
+          $inc: { count: 1 },
+          $set: { refreshLockId: lockId, refreshLockExpiresAt: new Date(now.getTime() + 30_000) },
+        },
+        { new: true },
+      );
+
+      if (!updatedCounter) {
+        const latestCounter = await findOneDoc(ApiCounter, { date: today, apiKey: apiKeyHash });
+        const code = !latestCounter || latestCounter.count >= latestCounter.limit ? "API_DAILY_LIMIT" : "API_UPDATE_IN_PROGRESS";
+        const err = new Error(`${code}: ${code === "API_DAILY_LIMIT" ? "API limit reached for today" : "Another price update is in progress"}`);
+        (err as any).code = code;
+        throw err;
+      }
+
+      apiCallCount++;
+      remainingCalls = Math.max(0, updatedCounter.limit - updatedCounter.count);
+      const lastProviderRequestAt = updatedCounter.lastProviderRequestAt?.getTime() || 0;
+      await delay(Math.max(0, lastProviderRequestAt + ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS - Date.now()));
+      await ApiCounter.updateOne(
+        { date: today, apiKey: apiKeyHash, refreshLockId: lockId },
+        { $set: { lastProviderRequestAt: new Date() } },
+      );
+      return async () => {
+        await ApiCounter.updateOne(
+          { date: today, apiKey: apiKeyHash, refreshLockId: lockId },
+          { $unset: { refreshLockId: 1, refreshLockExpiresAt: 1 } },
+        );
+      };
+    }
 
     async function getFxToEUR(from: string): Promise<number> {
       const cur = (from || "").toUpperCase();
@@ -211,17 +268,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const url = `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${encodeURIComponent(
         cur,
       )}&to_currency=EUR&apikey=${ALPHA_KEY}`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      ensureAlphaNotThrottled(data);
-      const rateStr = data?.["Realtime Currency Exchange Rate"]?.["5. Exchange Rate"];
-      if (!rateStr) throw new Error(`FX rate not available for ${cur}->EUR`);
-      const rate = Number(rateStr);
-      if (Number.isNaN(rate)) throw new Error(`Invalid FX rate string: "${rateStr}" for ${cur}->EUR`);
-      fxCache.set(cur, rate);
-      apiCallCount++;
-      await delay(1000); // AlphaVantage: 1 request per second
-      return rate;
+      const releaseApiCall = await reserveApiCall();
+      try {
+        const resp = await fetch(url, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
+        const data = await resp.json();
+        ensureAlphaNotThrottled(data);
+        const rateStr = data?.["Realtime Currency Exchange Rate"]?.["5. Exchange Rate"];
+        if (!rateStr) throw new Error(`FX rate not available for ${cur}->EUR`);
+        const rate = Number(rateStr);
+        if (Number.isNaN(rate)) throw new Error(`Invalid FX rate string: "${rateStr}" for ${cur}->EUR`);
+        fxCache.set(cur, rate);
+        return rate;
+      } finally {
+        await releaseApiCall();
+      }
     }
 
     for (const asset of filteredAssets) {
@@ -235,11 +295,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let fetched: FetchResult | null = null;
 
         if (type === "crypto") {
-          fetched = await fetchCryptoToEUR(symbol);
-          apiCallCount++; // Increment for each API call
+          fetched = await fetchCryptoToEUR(symbol, reserveApiCall);
         } else if (type === "stocks" || type === "stock") {
-          fetched = await fetchStock(symbol);
-          apiCallCount++; // Increment for each API call
+          fetched = await fetchStock(symbol, reserveApiCall);
           // Convert non-EUR quotes to EUR for consistency
           if (fetched && fetched.currency && fetched.currency !== "EUR") {
             const rate = await getFxToEUR(fetched.currency);
@@ -248,8 +306,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
           // Heuristic: only for unknown types, try stock API if symbol looks like a ticker
           if (/^[A-Z0-9\.-]+$/i.test(symbol)) {
-            fetched = await fetchStock(symbol);
-            apiCallCount++; // Increment for each API call
+            fetched = await fetchStock(symbol, reserveApiCall);
             if (fetched && fetched.currency && fetched.currency !== "EUR") {
               const rate = await getFxToEUR(fetched.currency);
               fetched = { value: fetched.value * rate, currency: "EUR", raw: fetched.raw };
@@ -283,27 +340,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const message = e instanceof Error ? e.message : String(e);
         results.push({ symbol, ok: false, reason: message });
         // If we hit AlphaVantage throttle, stop further requests to save remaining calls
-        if ((e as any)?.code === "ALPHA_RATE_LIMIT" || String(message).startsWith("ALPHA_RATE_LIMIT")) {
+        if (
+          (e as any)?.code === "ALPHA_RATE_LIMIT" ||
+          (e as any)?.code === "API_DAILY_LIMIT" ||
+          (e as any)?.code === "API_UPDATE_IN_PROGRESS" ||
+          String(message).startsWith("ALPHA_RATE_LIMIT") ||
+          String(message).startsWith("API_DAILY_LIMIT") ||
+          String(message).startsWith("API_UPDATE_IN_PROGRESS")
+        ) {
           break;
         }
       }
     }
 
-    // Update counter in DB
-    if (apiCallCount > 0) {
-      await ApiCounter.updateOne({ date: today, apiKey: apiKeyHash }, { $inc: { count: apiCallCount } }, { upsert: true });
-    }
 
     return res.status(200).json({
       fetched: results.filter((r) => r.ok).length,
       total: results.length,
       apiCalls: apiCallCount,
-      remainingCalls: Math.max(0, counter.limit - (counter.count + apiCallCount)),
+      remainingCalls,
       results,
     });
   } catch (error) {
     console.error("Error in /api/prices/fetch:", error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return res.status(500).json({ error: `Internal server error: ${errorMessage}` });
+    return res.status(500).json({ error: "Price refresh failed. Please try again." });
   }
 }

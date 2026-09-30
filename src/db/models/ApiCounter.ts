@@ -8,6 +8,9 @@ export interface IApiCounter extends Document {
   apiKey: string; // AlphaVantage API Key hash or identifier
   count: number;
   limit: number;
+  refreshLockId?: string;
+  refreshLockExpiresAt?: Date;
+  lastProviderRequestAt?: Date;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -18,6 +21,9 @@ const apiCounterSchema = new Schema<IApiCounter>(
     apiKey: { type: String, required: true }, // AlphaVantage API Key hash
     count: { type: Number, default: 0 },
     limit: { type: Number, default: 25 },
+    refreshLockId: { type: String },
+    refreshLockExpiresAt: { type: Date },
+    lastProviderRequestAt: { type: Date },
   },
   { timestamps: true },
 );
