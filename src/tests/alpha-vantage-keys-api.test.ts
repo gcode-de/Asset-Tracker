@@ -49,8 +49,12 @@ describe("/api/user/alpha-vantage-keys", () => {
   ])("reports safe configuration diagnostics for %s", async (secret, code) => {
     if (secret === undefined) delete process.env.USER_API_TOKEN_ENCRYPTION_KEY;
     else process.env.USER_API_TOKEN_ENCRYPTION_KEY = secret;
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const res = response();
     await handler({ method: "POST", body: { apiKey: "private-provider-token" } } as any, res as any);
+    expect(log).toHaveBeenCalledWith("[private-key-storage]", expect.objectContaining({ encryptionKeyPresent: secret !== undefined }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private-provider-token");
+    log.mockRestore();
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual(expect.objectContaining({ code }));
     expect(JSON.stringify(res.body)).not.toContain("private-provider-token");

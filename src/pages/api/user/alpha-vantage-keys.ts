@@ -36,6 +36,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       encryptedKey = encryptUserApiKey(apiKey);
     } catch (error) {
+      console.error("[private-key-storage]", {
+        encryptionKeyPresent: Boolean(process.env.USER_API_TOKEN_ENCRYPTION_KEY),
+        matchingVariableNames: Object.keys(process.env).filter((name) => /ENCRYPTION|USER_API_TOKEN/i.test(name)),
+        deployContext: process.env.CONTEXT || "unknown",
+        deployId: process.env.DEPLOY_ID || "unknown",
+      });
       const message = error instanceof Error ? error.message : "";
       if (message === "USER_API_TOKEN_ENCRYPTION_KEY must be configured") {
         return res.status(500).json({
