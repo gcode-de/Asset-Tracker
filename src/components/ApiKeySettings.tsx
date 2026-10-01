@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { revalidateApiCounter } from "@/lib/refresh-http";
 
 type KeyMetadata = { id: string; maskedSuffix: string; createdAt: string };
 
@@ -39,6 +40,7 @@ export default function ApiKeySettings() {
       if (!response.ok) throw new Error(data.error || "Could not add key");
       setKeys((current) => [...current, data.key]);
       setApiKey("");
+      revalidateApiCounter();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not add key");
     } finally {
@@ -54,6 +56,7 @@ export default function ApiKeySettings() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Could not delete key");
       setKeys(data.keys || []);
+      revalidateApiCounter();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not delete key");
     } finally {

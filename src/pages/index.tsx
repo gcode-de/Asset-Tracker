@@ -7,6 +7,7 @@ import Login from "@/components/Login";
 import AssetDialog from "@/components/AssetDialog";
 import Prices from "@/components/Prices";
 import ApiLimitBadge from "@/components/ApiLimitBadge";
+import { refreshOneSymbol } from "@/lib/refresh-http";
 import PortfolioOverview from "@/components/PortfolioOverview";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -20,7 +21,7 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { AlertCircle, ArrowRight, Database, RotateCcw, WalletCards } from "lucide-react";
-import { collectRefreshableSymbols, refreshSymbolsSequentially, type SymbolRefreshResult } from "@/lib/price-refresh";
+import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "@/lib/price-refresh";
 
 interface UserData {
   _id: string;
@@ -159,11 +160,10 @@ export default function App() {
       return;
     }
     try {
-      const response = await fetch("/api/prices/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ symbol }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || "Price update failed");
-      toast({ title: data.fetched > 0 ? `${symbol} updated` : `No price found for ${symbol}` });
-      if (typeof data.remainingCalls === "number") setApiRemaining(data.remainingCalls);
+      const result = await refreshOneSymbol(symbol);
+      if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
+      if (!result.ok) throw new Error(result.reason || "No quote available");
+      toast({ title: `${symbol} updated`, description: `${result.apiCalls} API calls used` });
       setPriceRefreshVersion((version) => version + 1);
       mutate("/api/user");
     } catch (error) {
@@ -195,30 +195,7 @@ export default function App() {
     try {
       const results = await refreshSymbolsSequentially({
         symbols,
-        refreshSymbol: async (symbol): Promise<SymbolRefreshResult> => {
-          const response = await fetch("/api/prices/fetch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ symbol }),
-          });
-          const data = await response.json();
-          if (!response.ok) {
-            if (response.status === 429) {
-              return { symbol, ok: false, reason: data?.error || "API limit reached", apiCalls: 0, remainingCalls: 0, terminal: true };
-            }
-            throw new Error(data?.error || "Price update failed");
-          }
-          const result = Array.isArray(data.results) ? data.results[0] : undefined;
-          return {
-            symbol,
-            ok: Boolean(result?.ok),
-            reason: result?.reason,
-            apiCalls: Number(data.apiCalls || 0),
-            remainingCalls: typeof data.remainingCalls === "number" ? data.remainingCalls : undefined,
-            terminal: /^(ALPHA_RATE_LIMIT|API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS)/.test(String(result?.reason || "")),
-          };
-        },
+        refreshSymbol: refreshOneSymbol,
         onResult: (result) => {
           if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
           if (result.ok) setPriceRefreshVersion((version) => version + 1);
@@ -231,7 +208,8 @@ export default function App() {
       });
       setPriceRefreshVersion((version) => version + 1);
       mutate("/api/user");
-      toast({ title: `${results.filter((result) => result.ok).length}/${results.length} assets updated` });
+      const summary = summarizeRefreshResults(results, apiRemaining);
+      toast({ title: `${summary.fetched}/${summary.total} assets updated`, description: `${summary.apiCalls ?? "Unknown"} API calls used • ${summary.remainingCalls} app-tracked calls remaining` });
       if (results.length < symbols.length) {
         toast({ title: "Refresh stopped", description: `${symbols.length - results.length} asset${symbols.length - results.length === 1 ? "" : "s"} skipped because the provider is unavailable right now.`, variant: "destructive" });
       }

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { collectRefreshableSymbols, refreshSymbolsSequentially } from "./price-refresh";
+import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "./price-refresh";
+
+it("summarizes actual quote/FX attempts and the final aggregate remaining allowance", () => {
+  expect(summarizeRefreshResults([
+    { symbol: "AAPL", ok: true, apiCalls: 2, remainingCalls: 48 },
+    { symbol: "MSFT", ok: false, apiCalls: 1, remainingCalls: 47 },
+  ], 50)).toEqual({ fetched: 1, total: 2, apiCalls: 3, remainingCalls: 47 });
+});
+
+it("keeps aggregate usage unknown when any request has unknown accounting", () => {
+  expect(summarizeRefreshResults([
+    { symbol: "AAPL", ok: true, apiCalls: 2, remainingCalls: 23 },
+    { symbol: "MSFT", ok: false, apiCalls: null },
+  ], 25).apiCalls).toBeNull();
+});
 
 describe("collectRefreshableSymbols", () => {
   it("deduplicates supported symbols and refreshes the stalest price first", () => {
@@ -119,7 +133,7 @@ describe("refreshSymbolsSequentially", () => {
     });
 
     expect(results).toEqual([
-      { symbol: "BAD", ok: false, apiCalls: 0, remainingCalls: undefined, reason: "No quote available" },
+      { symbol: "BAD", ok: false, apiCalls: null, remainingCalls: undefined, reason: "No quote available" },
       { symbol: "MSFT", ok: true, apiCalls: 1, remainingCalls: 23 },
     ]);
   });

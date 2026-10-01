@@ -9,7 +9,8 @@ export interface RefreshableAsset {
 export interface SymbolRefreshResult {
   symbol: string;
   ok: boolean;
-  apiCalls: number;
+  /** null means the server usage could not be determined. */
+  apiCalls: number | null;
   remainingCalls?: number;
   reason?: string;
   terminal?: boolean;
@@ -20,6 +21,15 @@ export interface PriceRefreshResponse {
   apiCalls: number;
   remainingCalls: number;
   results?: Array<{ symbol: string; ok: boolean; reason?: string }>;
+}
+
+export function summarizeRefreshResults(results: SymbolRefreshResult[], fallbackRemaining: number) {
+  return {
+    fetched: results.filter((result) => result.ok).length,
+    total: results.length,
+    apiCalls: results.some((result) => result.apiCalls === null) ? null : results.reduce((sum, result) => sum + (result.apiCalls ?? 0), 0),
+    remainingCalls: [...results].reverse().find((result) => typeof result.remainingCalls === "number")?.remainingCalls ?? fallbackRemaining,
+  };
 }
 
 const refreshableAssetTypes = new Set(["stock", "stocks", "etf", "fund", "crypto"]);
@@ -74,7 +84,7 @@ export async function refreshSymbolsSequentially({
       result = {
         symbol,
         ok: false,
-        apiCalls: 0,
+        apiCalls: null,
         remainingCalls: undefined,
         reason: error instanceof Error ? error.message : String(error),
       };

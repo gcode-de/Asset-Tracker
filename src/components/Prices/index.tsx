@@ -7,8 +7,9 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import ApiLimitBadge from "@/components/ApiLimitBadge";
+import { refreshOneSymbol } from "@/lib/refresh-http";
 import { AlertCircle, Clock, RotateCcw } from "lucide-react";
-import { collectRefreshableSymbols, refreshSymbolsSequentially, type SymbolRefreshResult } from "@/lib/price-refresh";
+import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "@/lib/price-refresh";
 
 interface Price {
   symbol: string;
@@ -28,7 +29,7 @@ interface FetchResultItem {
 interface FetchSummary {
   fetched: number;
   total: number;
-  apiCalls: number;
+  apiCalls: number | null;
   remainingCalls: number;
   results: FetchResultItem[];
 }
@@ -111,31 +112,7 @@ export default function Prices() {
     return () => clearInterval(interval);
   }, [lastFetchTime]);
 
-  const fetchOnePrice = async (symbol: string): Promise<SymbolRefreshResult> => {
-    const resp = await fetch("/api/prices/fetch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ symbol }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      if (resp.status === 429) {
-        return { symbol, ok: false, reason: data?.error || "API limit reached", apiCalls: 0, remainingCalls: 0, terminal: true };
-      }
-      throw new Error(data?.error || "Fetch failed");
-    }
-
-    const result = Array.isArray(data.results) ? data.results[0] : undefined;
-    return {
-      symbol,
-      ok: Boolean(result?.ok),
-      reason: result?.reason,
-      apiCalls: Number(data.apiCalls || 0),
-      remainingCalls: typeof data.remainingCalls === "number" ? data.remainingCalls : undefined,
-      terminal: /^(ALPHA_RATE_LIMIT|API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS)/.test(String(result?.reason || "")),
-    };
-  };
+  const fetchOnePrice = refreshOneSymbol;
 
   const onFetchLatest = async () => {
     if (!session) {
@@ -152,7 +129,7 @@ export default function Prices() {
       setRefreshProgress({ completed: 0, total: refreshableSymbols.length });
       const results = await refreshSymbolsSequentially({
         symbols: refreshableSymbols,
-        refreshSymbol: fetchOnePrice,
+        refreshSymbol: (symbol) => { setRefreshProgress((progress) => progress ? { ...progress, symbol } : null); return fetchOnePrice(symbol); },
         onResult: async (result, index, total) => {
           setRefreshProgress({ completed: index + 1, total, symbol: result.symbol });
           if (typeof result.remainingCalls === "number") setRemaining(result.remainingCalls);
@@ -165,13 +142,8 @@ export default function Prices() {
         },
       });
 
-      const apiCalls = results.reduce((sum, result) => sum + result.apiCalls, 0);
-      const remainingCalls = [...results].reverse().find((result) => typeof result.remainingCalls === "number")?.remainingCalls ?? remaining;
       setLastSummary({
-        fetched: results.filter((result) => result.ok).length,
-        total: results.length,
-        apiCalls,
-        remainingCalls,
+        ...summarizeRefreshResults(results, remaining),
         results: results.map((result) => ({ symbol: result.symbol, ok: result.ok, reason: result.reason })),
       });
       if (results.length < refreshableSymbols.length) {
@@ -238,7 +210,7 @@ export default function Prices() {
         {lastSummary && (
           <div className="mb-4 p-3 border rounded-md bg-muted/20">
             <div className="text-sm mb-2">
-              <span className="font-medium">Last Fetch:</span> {lastSummary.fetched}/{lastSummary.total} updated • {lastSummary.apiCalls} calls •{" "}
+              <span className="font-medium">Last Fetch:</span> {lastSummary.fetched}/{lastSummary.total} updated • {lastSummary.apiCalls ?? "Unknown"} calls •{" "}
               {lastSummary.remainingCalls} remaining
             </div>
             <Button variant="outline" size="sm" onClick={() => setShowDetails((v) => !v)}>

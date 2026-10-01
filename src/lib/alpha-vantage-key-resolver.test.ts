@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { findOneAndUpdate } = vi.hoisted(() => ({ findOneAndUpdate: vi.fn() }));
 vi.mock("@/db/models/User", () => ({ default: { findOneAndUpdate } }));
 
-import { resolveAlphaVantageKey } from "./alpha-vantage-key-resolver";
+import { resolveAlphaVantageKey, resolveAlphaVantageKeys } from "./alpha-vantage-key-resolver";
+
+it("reads all effective tokens without advancing the cursor for quota display", async () => {
+  const findOne = vi.fn().mockResolvedValue({ alphaVantageKeys: [{ encryptedKey: "x", maskedSuffix: "1111" }, { encryptedKey: "y", maskedSuffix: "2222" }, { encryptedKey: "z", maskedSuffix: "3333" }] });
+  const keys = await resolveAlphaVantageKeys("user@example.com", { advance: false, findUser: findOne, decrypt: (value) => value === "z" ? "x" : value });
+  expect(keys.map((item) => item.key)).toEqual(["x", "y"]);
+  expect(findOne).toHaveBeenCalledWith({ email: "user@example.com" });
+});
 
 describe("resolveAlphaVantageKey", () => {
   beforeEach(() => {

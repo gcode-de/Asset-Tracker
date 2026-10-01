@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { readJsonResponse } from "@/lib/refresh-http";
 
 interface ApiLimitInfo {
   count: number;
@@ -9,19 +11,10 @@ interface ApiLimitInfo {
 }
 
 const getApiLimitInfo = async (): Promise<ApiLimitInfo> => {
-  try {
-    const response = await fetch("/api/counter");
-    const data = await response.json();
-    return {
-      count: data.count || 0,
-      limit: data.limit || 25,
-      remaining: data.limit - data.count || 25,
-      date: data.date,
-    };
-  } catch (error) {
-    console.error("Failed to fetch API counter:", error);
-    return { count: 0, limit: 25, remaining: 25 };
-  }
+  const response = await fetch("/api/counter", { credentials: "same-origin", cache: "no-store" });
+  const data = await readJsonResponse(response, "App-tracked allowance");
+  if (![data.count, data.limit, data.remaining].every((value) => typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0)) throw new Error("Unexpected allowance response");
+  return { count: data.count, limit: data.limit, remaining: data.remaining, date: data.date };
 };
 
 const getColorAndIcon = (remaining: number) => {
@@ -58,31 +51,44 @@ interface ApiLimitBadgeProps {
 }
 
 export default function ApiLimitBadge({ onRemainingChange }: ApiLimitBadgeProps) {
-  const [info, setInfo] = useState<ApiLimitInfo>({ count: 0, limit: 25, remaining: 25 });
-  const [mounted, setMounted] = useState(false);
+  const { data: session, status: sessionStatus } = useSession();
+  const email = session?.user?.email;
+  if (sessionStatus !== "authenticated" || !email) return null;
+  // Remount identity-owned state and request generations before rendering another account.
+  return <IdentityApiLimitBadge key={email} onRemainingChange={onRemainingChange} />;
+}
+
+function IdentityApiLimitBadge({ onRemainingChange }: ApiLimitBadgeProps) {
+  const [info, setInfo] = useState<ApiLimitInfo | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
-
+    let active = true;
+    let generation = 0;
     const loadCounter = async () => {
-      const data = await getApiLimitInfo();
-      setInfo(data);
-      onRemainingChange?.(data.remaining);
+      const current = ++generation;
+      try {
+        const data = await getApiLimitInfo();
+        if (!active || current !== generation) return;
+        setInfo(data);
+        setUnavailable(false);
+        onRemainingChange?.(data.remaining);
+      } catch {
+        if (active && current === generation) setUnavailable(true);
+      }
     };
-
     loadCounter();
-
-    // Refresh every 10 seconds
+    window.addEventListener("api-counter-changed", loadCounter);
     const interval = setInterval(loadCounter, 10000);
-    return () => clearInterval(interval);
+    return () => { active = false; clearInterval(interval); window.removeEventListener("api-counter-changed", loadCounter); };
   }, [onRemainingChange]);
 
-  if (!mounted) return null;
+  if (!info) return <div className="text-sm text-muted-foreground" role="status">{unavailable ? "App-tracked allowance unavailable" : "Loading app-tracked allowance…"}</div>;
 
   const { color, icon: IconComponent, status } = getColorAndIcon(info.remaining);
   const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  tomorrow.setUTCHours(0, 0, 0, 0);
   const resetTime = tomorrow.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 
   return (
@@ -92,7 +98,9 @@ export default function ApiLimitBadge({ onRemainingChange }: ApiLimitBadgeProps)
         <div>
           <div className="font-semibold text-sm">{status}</div>
           <div className="text-xs opacity-75">
-            {info.count}/{info.limit} calls today • Resets at {resetTime}
+            {info.count}/{info.limit} app-tracked calls today • Resets at {resetTime}
+            <div>Per-key app allowance, not provider-account quota. Provider terms and limits still apply.</div>
+            {unavailable && <div role="status">Allowance update unavailable; showing last known totals.</div>}
           </div>
         </div>
       </div>

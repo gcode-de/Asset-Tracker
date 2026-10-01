@@ -1,17 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import crypto from "crypto";
 import dbConnect from "@/db/connect";
-import ApiCounter from "@/db/models/ApiCounter";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
-import { resolveAlphaVantageKey } from "@/lib/alpha-vantage-key-resolver";
+import { createAlphaVantageClient, MarketDataError } from "@/lib/alpha-vantage-provider";
 
-const ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS = 12_000;
-const ALPHA_VANTAGE_REQUEST_TIMEOUT_MS = 12_000;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+export const config = { maxDuration: 30 };
 
 interface AlphaVantageSearchResult {
   "1. symbol": string;
@@ -38,9 +31,11 @@ interface SearchMatch {
 interface SearchResponse {
   matches: SearchMatch[];
   count: number;
+  apiCalls?: number;
+  remainingCalls?: number;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<SearchResponse | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<SearchResponse | { error: string; apiCalls?: number; remainingCalls?: number }>) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -55,39 +50,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const email = session?.user?.email;
   if (!email) return res.status(401).json({ error: "Unauthorized" });
 
+  let provider: Awaited<ReturnType<typeof createAlphaVantageClient>> | undefined;
   try {
     await dbConnect();
-    const alphaVantage = await resolveAlphaVantageKey(email);
-    const today = new Date().toISOString().split("T")[0];
-    const apiKeyHash = crypto.createHash("sha256").update(alphaVantage.key).digest("hex");
-    const counter = await ApiCounter.findOneAndUpdate(
-      { date: today, apiKey: apiKeyHash },
-      { $setOnInsert: { date: today, apiKey: apiKeyHash, count: 0, limit: 25 } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
-
-    const lockId = crypto.randomUUID();
-    const now = new Date();
-    const lockedCounter = await ApiCounter.findOneAndUpdate(
-      {
-        date: today,
-        apiKey: apiKeyHash,
-        count: { $lt: counter.limit },
-        $or: [{ refreshLockExpiresAt: { $exists: false } }, { refreshLockExpiresAt: { $lte: now } }],
-      },
-      { $inc: { count: 1 }, $set: { refreshLockId: lockId, refreshLockExpiresAt: new Date(now.getTime() + 30_000) } },
-      { new: true },
-    );
-    if (!lockedCounter) {
-      return res.status(429).json({ error: "Market data is busy or the daily limit has been reached" });
-    }
-
-    const lastProviderRequestAt = lockedCounter.lastProviderRequestAt?.getTime() || 0;
-    await delay(Math.max(0, lastProviderRequestAt + ALPHA_VANTAGE_FREE_TIER_INTERVAL_MS - Date.now()));
-    await ApiCounter.updateOne(
-      { date: today, apiKey: apiKeyHash, refreshLockId: lockId },
-      { $set: { lastProviderRequestAt: new Date() } },
-    );
+    provider = await createAlphaVantageClient(email);
 
     // Common crypto symbols to search for
     const cryptoSymbols = ["BTC", "ETH", "BNB", "XRP", "ADA", "DOGE", "SOL", "MATIC", "DOT", "AVAX", "SHIB", "LTC", "UNI", "LINK", "XLM"];
@@ -102,16 +68,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       queryUpper.includes("CRYPTO");
 
     // Search stocks/ETFs
-    const stockUrl = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${encodeURIComponent(query)}&apikey=${alphaVantage.key}`;
     let stockData: any;
     try {
-      const stockResponse = await fetch(stockUrl, { signal: AbortSignal.timeout(ALPHA_VANTAGE_REQUEST_TIMEOUT_MS) });
-      stockData = await stockResponse.json();
-    } finally {
-      await ApiCounter.updateOne(
-        { date: today, apiKey: apiKeyHash, refreshLockId: lockId },
-        { $unset: { refreshLockId: 1, refreshLockExpiresAt: 1 } },
-      );
+      stockData = await provider.request({ function: "SYMBOL_SEARCH", keywords: query });
+    } catch (error) {
+      const quota = await provider.quota().catch(() => undefined);
+      const terminal = error instanceof MarketDataError && /^(API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS|ALPHA_RATE_LIMIT)$/.test(error.code);
+      return res.status(terminal ? 429 : 502).json({ error: error instanceof MarketDataError ? error.message : "Asset search failed. Please try again.", apiCalls: provider.apiCalls, ...(quota ? { remainingCalls: quota.remaining } : {}) });
     }
 
     let matches: SearchMatch[] = [];
@@ -179,9 +142,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       matches = [...cryptoMatches, ...matches];
     }
 
-    return res.status(200).json({ matches: matches.slice(0, 10), count: matches.length });
-  } catch (error) {
-    console.error("Asset search error:", error);
-    return res.status(500).json({ error: "Asset search failed. Please try again." });
+    const quota = await provider.quota().catch(() => undefined);
+    return res.status(200).json({ matches: matches.slice(0, 10), count: matches.length, apiCalls: provider.apiCalls, ...(quota ? { remainingCalls: quota.remaining } : {}) });
+  } catch {
+    return res.status(500).json({ error: "Asset search failed. Please try again.", ...(provider ? { apiCalls: provider.apiCalls } : {}) });
   }
 }

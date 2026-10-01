@@ -7,6 +7,7 @@ import { Loader2, Plus, AlertCircle, Lightbulb } from "lucide-react";
 import axios from "axios";
 import { FavoriteToggle, FavoritesList } from "@/components/Favorites";
 import { demoSearchResults } from "@/lib/demo";
+import { revalidateApiCounter } from "@/lib/refresh-http";
 
 interface SearchResult {
   symbol: string;
@@ -65,6 +66,7 @@ export default function AssetSearchDialog({ open, onOpenChange, onAddAsset, demo
       setError(message);
       setResults([]);
     } finally {
+      if (!demoMode) revalidateApiCounter();
       setIsLoading(false);
     }
   };
