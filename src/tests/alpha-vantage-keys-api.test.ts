@@ -57,6 +57,12 @@ describe("/api/user/alpha-vantage-keys", () => {
     log.mockRestore();
     expect(res.statusCode).toBe(500);
     expect(res.body).toEqual(expect.objectContaining({ code }));
+    if (secret === undefined) {
+      expect(res.body).toEqual(expect.objectContaining({
+        diagnostics: expect.objectContaining({ encryptionKeyPresent: false, matchingVariableNames: expect.any(Array) }),
+        error: expect.stringContaining("Runtime diagnostics:"),
+      }));
+    }
     expect(JSON.stringify(res.body)).not.toContain("private-provider-token");
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });

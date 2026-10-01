@@ -36,17 +36,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       encryptedKey = encryptUserApiKey(apiKey);
     } catch (error) {
-      console.error("[private-key-storage]", {
+      const diagnostics = {
         encryptionKeyPresent: Boolean(process.env.USER_API_TOKEN_ENCRYPTION_KEY),
         matchingVariableNames: Object.keys(process.env).filter((name) => /ENCRYPTION|USER_API_TOKEN/i.test(name)),
         deployContext: process.env.CONTEXT || "unknown",
         deployId: process.env.DEPLOY_ID || "unknown",
-      });
+        diagnosticVersion: "private-key-runtime-v2",
+      };
+      console.error("[private-key-storage]", diagnostics);
       const message = error instanceof Error ? error.message : "";
       if (message === "USER_API_TOKEN_ENCRYPTION_KEY must be configured") {
         return res.status(500).json({
           code: "ENCRYPTION_KEY_MISSING",
-          error: "USER_API_TOKEN_ENCRYPTION_KEY is missing in the running server function. Check the Production context and Functions scope, then redeploy.",
+          diagnostics,
+          error: `USER_API_TOKEN_ENCRYPTION_KEY is missing in the running server function. Runtime diagnostics: ${JSON.stringify(diagnostics)}`,
         });
       }
       if (message.startsWith("USER_API_TOKEN_ENCRYPTION_KEY must be a 32-byte")) {
