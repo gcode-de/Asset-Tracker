@@ -35,7 +35,7 @@ interface SearchResponse {
   remainingCalls?: number;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<SearchResponse | { error: string; apiCalls?: number; remainingCalls?: number }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<SearchResponse | { error: string; apiCalls?: number; remainingCalls?: number; retryAfter?: number }>) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -73,8 +73,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       stockData = await provider.request({ function: "SYMBOL_SEARCH", keywords: query });
     } catch (error) {
       const quota = await provider.quota().catch(() => undefined);
-      const terminal = error instanceof MarketDataError && /^(API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS|ALPHA_RATE_LIMIT)$/.test(error.code);
-      return res.status(terminal ? 429 : 502).json({ error: error instanceof MarketDataError ? error.message : "Asset search failed. Please try again.", apiCalls: provider.apiCalls, ...(quota ? { remainingCalls: quota.remaining } : {}) });
+      const terminal = error instanceof MarketDataError && /^(API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS|ALPHA_RATE_LIMIT(?:_(?:BURST|DAILY|UNKNOWN))?)$/.test(error.code);
+      if (error instanceof MarketDataError && error.retryAfter) res.setHeader("Retry-After", String(error.retryAfter));
+      return res.status(terminal ? 429 : 502).json({ ...(error instanceof MarketDataError && error.retryAfter ? { retryAfter: error.retryAfter } : {}), error: error instanceof MarketDataError ? error.message : "Asset search failed. Please try again.", apiCalls: provider.apiCalls, ...(quota ? { remainingCalls: quota.remaining } : {}) });
     }
 
     let matches: SearchMatch[] = [];

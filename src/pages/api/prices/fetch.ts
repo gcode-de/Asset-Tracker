@@ -42,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const asset = user.assets?.find((item: any) => !item.isDeleted && isRefreshableAssetType(item.type) && String(item.abb || item.name || item.id || "").toUpperCase() === symbol);
     if (!asset) return res.status(404).json({ error: "Refreshable asset not found" });
     provider = await createAlphaVantageClient(email);
-    const results: Array<{ symbol: string; ok: boolean; reason?: string; price?: any }> = [];
+    const results: Array<{ symbol: string; ok: boolean; reason?: string; retryAfter?: number; price?: any }> = [];
     try {
       let value: number;
       if (String(asset.type).toLowerCase() === "crypto") {
@@ -61,7 +61,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         results.push({ symbol, ok: true, price });
       }
     } catch (error) {
-      results.push({ symbol, ok: false, reason: error instanceof MarketDataError ? error.message : "Price refresh failed. Please try again." });
+      if (error instanceof MarketDataError && error.retryAfter) res.setHeader("Retry-After", String(error.retryAfter));
+      results.push({ symbol, ok: false, ...(error instanceof MarketDataError && error.retryAfter ? { retryAfter: error.retryAfter } : {}), reason: error instanceof MarketDataError ? error.message : "Price refresh failed. Please try again." });
     }
     const quota = await provider.quota().catch(() => undefined);
     return res.status(200).json({ fetched: results.filter((result) => result.ok).length, total: results.length, apiCalls: provider.apiCalls, ...(quota ? { remainingCalls: quota.remaining } : {}), results });

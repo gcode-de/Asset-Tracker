@@ -54,6 +54,10 @@ describe("safe refresh HTTP responses", () => {
   it("rejects malformed successful JSON safely", async () => {
     await expect(readJsonResponse(new Response("broken", { headers: { "content-type": "application/json" } }))).rejects.toThrow(/invalid JSON/i);
   });
+  it.each(["ALPHA_RATE_LIMIT_BURST", "ALPHA_RATE_LIMIT_DAILY", "ALPHA_RATE_LIMIT_UNKNOWN", "ALPHA_STORAGE"])("stops a batch on safe server coordination diagnosis %s", async (code) => {
+    const result = await refreshOneSymbol("AAPL", vi.fn().mockResolvedValue(Response.json({ apiCalls: 1, remainingCalls: 24, results: [{ symbol: "AAPL", ok: false, reason: `${code}: Requests paused for safety.` }] })));
+    expect(result).toMatchObject({ terminal: true, apiCalls: 1, remainingCalls: 24 });
+  });
   it("keeps busy responses terminal without inventing zero quota", async () => {
     const result = await refreshOneSymbol("AAPL", vi.fn().mockResolvedValue(Response.json({ error: "API_UPDATE_IN_PROGRESS: Another update is in progress", remainingCalls: 7, apiCalls: 0 }, { status: 429 })));
     expect(result).toMatchObject({ terminal: true, remainingCalls: 7, apiCalls: 0 });

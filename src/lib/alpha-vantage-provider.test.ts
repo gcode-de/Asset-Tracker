@@ -1,12 +1,77 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ counter: { findOneAndUpdate: vi.fn(), findOne: vi.fn(), updateOne: vi.fn() }, fx: { findOne: vi.fn(), findOneAndUpdate: vi.fn() }, keys: vi.fn() }));
+const mocks = vi.hoisted(() => ({ state: { findOne: vi.fn(), findOneAndUpdate: vi.fn(), updateOne: vi.fn() }, counter: { findOneAndUpdate: vi.fn(), findOne: vi.fn(), updateOne: vi.fn() }, fx: { findOne: vi.fn(), findOneAndUpdate: vi.fn() }, keys: vi.fn() }));
+vi.mock("@/db/models/AlphaVantageState", () => ({ default: mocks.state }));
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.counter.findOne.mockResolvedValue(null);
+  mocks.counter.updateOne.mockResolvedValue({});
+  mocks.state.findOne.mockResolvedValue(null);
+  mocks.state.findOneAndUpdate.mockResolvedValue({});
+  mocks.state.updateOne.mockResolvedValue({ matchedCount: 1 });
+});
 vi.mock("@/db/models/ApiCounter", () => ({ default: mocks.counter }));
 vi.mock("@/db/models/FxRate", () => ({ default: mocks.fx }));
 vi.mock("@/lib/alpha-vantage-key-resolver", () => ({ resolveAlphaVantageKeys: mocks.keys }));
 import { createAlphaVantageClient, getAlphaVantageQuota, PROVIDER_TIMEOUT_MS, PROVIDER_LEASE_MS } from "./alpha-vantage-provider";
 
+it("paces a new client from persistent state while holding a lease", async () => {
+  mocks.keys.mockResolvedValue([{ key: "test-1" }]);
+  mocks.counter.findOne.mockResolvedValue(null);
+  mocks.counter.findOneAndUpdate.mockResolvedValue({ count: 1, limit: 25 });
+  mocks.state.findOneAndUpdate.mockResolvedValue({ lastProviderRequestAt: new Date(10_000) });
+  let now = 10_100;
+  const wait = vi.fn(async (ms: number) => { now += ms; });
+  const fetcher = vi.fn().mockImplementation(async () => { expect(now).toBe(11_500); return Response.json({}); });
+  const client = await createAlphaVantageClient("user@example.com", fetcher, { now: () => now, wait });
+  await client.request({ function: "SYMBOL_SEARCH" });
+  expect(wait).toHaveBeenCalledWith(1400);
+  expect(mocks.state.findOneAndUpdate).toHaveBeenCalled();
+});
+
+it("makes zero calls during a persisted throttle, even when rotation puts a clean key first", async () => {
+  mocks.keys.mockResolvedValue([{ key: "test-2" }, { key: "test-1" }]);
+  mocks.counter.findOne.mockResolvedValue(null);
+  mocks.counter.findOneAndUpdate.mockResolvedValue({ count: 1, limit: 25 });
+  mocks.state.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ cooldownUntil: new Date(30_000), cooldownCode: "ALPHA_RATE_LIMIT_BURST" });
+  const fetcher = vi.fn().mockResolvedValue(Response.json({}));
+  const client = await createAlphaVantageClient("user@example.com", fetcher, { now: () => 20_000, wait: vi.fn() });
+  await expect(client.request({ function: "SYMBOL_SEARCH" })).rejects.toMatchObject({ code: "ALPHA_RATE_LIMIT_BURST", retryAfter: 10 });
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(client.apiCalls).toBe(0);
+  expect(mocks.keys).not.toHaveBeenCalledWith("user@example.com", { advance: true });
+  expect(mocks.counter.findOneAndUpdate).not.toHaveBeenCalled();
+});
+
+it("honors a bounded HTTP429 Retry-After without exposing the response body or retrying", async () => {
+  mocks.keys.mockResolvedValue([{ key: "test-1" }, { key: "test-2" }]);
+  mocks.counter.findOneAndUpdate.mockResolvedValue({ count: 1, limit: 25 });
+  const fetcher = vi.fn().mockResolvedValue(new Response("private-key", { status: 429, headers: { "Retry-After": "120" } }));
+  const client = await createAlphaVantageClient("user@example.com", fetcher, { now: () => 20_000, wait: vi.fn() });
+  await expect(client.request({ function: "GLOBAL_QUOTE" })).rejects.toMatchObject({ code: "ALPHA_RATE_LIMIT_UNKNOWN", retryAfter: 120, message: expect.not.stringContaining("private-key") });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(client.apiCalls).toBe(1);
+  expect(mocks.state.updateOne).toHaveBeenCalledWith(expect.anything(), { $set: { cooldownUntil: new Date(140_000), cooldownCode: "ALPHA_RATE_LIMIT_UNKNOWN" } });
+});
+
+it.each([
+  ["Our standard API rate limit is 25 requests per day. Please consider spreading out your free API requests more sparingly (1 request per second).", "ALPHA_RATE_LIMIT_BURST"],
+  ["You have exceeded your daily request limit.", "ALPHA_RATE_LIMIT_DAILY"],
+  ["Our standard API rate limit is 25 requests per day.", "ALPHA_RATE_LIMIT_UNKNOWN"],
+  ["This is a premium endpoint. Subscribe to a premium plan.", "ALPHA_PLAN"],
+  ["This exchange rate endpoint is premium-only.", "ALPHA_PLAN"],
+  ["Premium subscription required to access real-time exchange rates.", "ALPHA_PLAN"],
+  ["Daily request limit exhausted. Please consider spreading out requests.", "ALPHA_RATE_LIMIT_DAILY"],
+])("diagnoses provider Information safely: %s", async (message, code) => {
+  mocks.keys.mockResolvedValue([{ key: "test-1" }]);
+  mocks.counter.findOne.mockResolvedValue(null);
+  mocks.counter.findOneAndUpdate.mockResolvedValue({ count: 1, limit: 25 });
+  mocks.counter.updateOne.mockResolvedValue({ matchedCount: 1 });
+  const client = await createAlphaVantageClient("user@example.com", vi.fn().mockResolvedValue(Response.json({ Information: `${message} private-key` })));
+  await expect(client.request({ function: "GLOBAL_QUOTE" })).rejects.toMatchObject({ code, message: expect.not.stringContaining("private-key") });
+  expect(client.apiCalls).toBe(1);
+});
+
 describe("shared provider quota", () => {
-  beforeEach(() => { vi.resetAllMocks(); mocks.counter.updateOne.mockResolvedValue({}); mocks.counter.findOne.mockResolvedValue(null); });
   it.each([0, 1, 2, 3])("aggregates %i own tokens, exposing only totals", async (number) => {
     mocks.keys.mockResolvedValue(Array.from({ length: number || 1 }, (_, i) => ({ key: `test-${i}`, identifier: number ? "user" : "server" })));
     const quota = await getAlphaVantageQuota("user@example.com");
@@ -79,7 +144,7 @@ describe("shared provider quota", () => {
     mocks.counter.findOneAndUpdate.mockResolvedValue({ count: 1, limit: 25 });
     const fetcher = vi.fn().mockResolvedValue(Response.json(body));
     const client = await createAlphaVantageClient("user@example.com", fetcher);
-    await expect(client.request({ function: "GLOBAL_QUOTE" })).rejects.toMatchObject({ code: "ALPHA_RATE_LIMIT", message: expect.not.stringContaining("secret-key") });
+    await expect(client.request({ function: "GLOBAL_QUOTE" })).rejects.toMatchObject({ code: "ALPHA_RATE_LIMIT_UNKNOWN", message: expect.not.stringContaining("secret-key") });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(client.apiCalls).toBe(1);
   });

@@ -8,11 +8,12 @@ vi.mock("next-auth/next", () => ({ getServerSession: mocks.session }));
 vi.mock("@/pages/api/auth/[...nextauth]", () => ({ authOptions: {} }));
 vi.mock("@/db/models/User", () => ({ default: { findOne: mocks.user } }));
 vi.mock("@/db/models/Price", () => ({ default: { findOneAndUpdate: mocks.price } }));
-vi.mock("@/lib/alpha-vantage-provider", () => ({ createAlphaVantageClient: mocks.client, getAlphaVantageQuota: mocks.quota, MarketDataError: class extends Error {} }));
+vi.mock("@/lib/alpha-vantage-provider", () => ({ createAlphaVantageClient: mocks.client, getAlphaVantageQuota: mocks.quota, MarketDataError: class extends Error { constructor(public code: string, message: string, public retryAfter?: number) { super(`${code}: ${message}`); } } }));
 import refresh from "@/pages/api/prices/fetch";
 import counter from "@/pages/api/counter";
 import reset from "@/pages/api/counter/reset";
 import search from "@/pages/api/assets/search";
+import { MarketDataError } from "@/lib/alpha-vantage-provider";
 function response() {
   const res = { status: vi.fn(), json: vi.fn(), setHeader: vi.fn(), end: vi.fn() };
   res.status.mockReturnValue(res); return res;
@@ -60,6 +61,18 @@ describe("market data route seams", () => {
     const res = response();
     await reset({ method: "POST" } as NextApiRequest, res as unknown as NextApiResponse);
     expect(res.status).toHaveBeenCalledWith(403);
+  });
+  it.each(["ALPHA_RATE_LIMIT_BURST", "ALPHA_RATE_LIMIT_DAILY", "ALPHA_RATE_LIMIT_UNKNOWN"])("preserves safe diagnosis and bounded Retry-After for quote and search: %s", async (code) => {
+    mocks.request.mockRejectedValue(new MarketDataError(code, "Provider requests are paused safely.", 60));
+    const quoteRes = response();
+    await refresh({ method: "POST", body: { symbol: "AAPL" } } as NextApiRequest, quoteRes as unknown as NextApiResponse);
+    expect(quoteRes.setHeader).toHaveBeenCalledWith("Retry-After", "60");
+    expect(quoteRes.json.mock.calls[0][0]).toMatchObject({ apiCalls: 2, remainingCalls: 24, results: [{ symbol: "AAPL", ok: false, reason: `${code}: Provider requests are paused safely.`, retryAfter: 60 }] });
+    const searchRes = response();
+    await search({ method: "GET", query: { query: "AAPL" } } as unknown as NextApiRequest, searchRes as unknown as NextApiResponse);
+    expect(searchRes.status).toHaveBeenCalledWith(429);
+    expect(searchRes.setHeader).toHaveBeenCalledWith("Retry-After", "60");
+    expect(searchRes.json.mock.calls[0][0]).toMatchObject({ error: `${code}: Provider requests are paused safely.`, retryAfter: 60, apiCalls: 2, remainingCalls: 24 });
   });
   it("search uses the shared provider and reports aggregate call metadata", async () => {
     mocks.request.mockResolvedValue({ bestMatches: [] });

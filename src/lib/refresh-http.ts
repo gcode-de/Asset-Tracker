@@ -47,7 +47,7 @@ async function performRefresh(symbol: string, fetcher: typeof fetch): Promise<Sy
     if (!response.ok) throw new Error(httpFailure(response.status));
     const result = Array.isArray(data.results) ? data.results[0] : undefined;
     if (apiCalls === null || !Array.isArray(data.results) || data.results.length !== 1 || !result || typeof result !== "object" || Array.isArray(result) || result.symbol !== symbol.toUpperCase() || typeof result.ok !== "boolean" || (result.reason !== undefined && typeof result.reason !== "string")) throw new Error("Price refresh returned an unexpected JSON response. Please try again.");
-    return { symbol, ok: result.ok, reason: result.reason, apiCalls, remainingCalls, terminal: /^(ALPHA_RATE_LIMIT|API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS)/.test(String(result.reason || "")) };
+    return { symbol, ok: result.ok, reason: result.reason, apiCalls, remainingCalls, terminal: /^(ALPHA_RATE_LIMIT|ALPHA_STORAGE|API_DAILY_LIMIT|API_UPDATE_IN_PROGRESS)/.test(String(result.reason || "")) };
   } catch (error) {
     return { symbol, ok: false, terminal: response.status === 429, apiCalls, remainingCalls, reason: !response.ok ? httpFailure(response.status) : error instanceof Error ? error.message : "Price refresh failed. Please try again." };
   }
