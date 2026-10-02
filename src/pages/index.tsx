@@ -15,7 +15,7 @@ import type { AssetType } from "@/components/Asset";
 import { demoAssets, readDemoAssets, writeDemoAssets, DEMO_STORAGE_KEY } from "@/lib/demo";
 import useSWR, { mutate } from "swr";
 import axios from "axios";
-import { useEffect, useState, FormEvent, useMemo } from "react";
+import { useEffect, useState, useRef, FormEvent, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
@@ -43,6 +43,9 @@ export default function App() {
   const [apiRemaining, setApiRemaining] = useState(25);
   const [isSaving, setIsSaving] = useState(false);
   const [priceRefreshVersion, setPriceRefreshVersion] = useState(0);
+  const priceRefreshInFlight = useRef(false);
+  const [isPriceRefreshing, setIsPriceRefreshing] = useState(false);
+  const [refreshingSymbol, setRefreshingSymbol] = useState<string | null>(null);
 
   const apiClient = useMemo(
     () => axios.create({ baseURL: "/api", headers: { "Content-Type": "application/json" } }),
@@ -150,6 +153,21 @@ export default function App() {
     setDialogOpen(true);
   }
 
+  function beginPriceRefresh(symbol?: string) {
+    // State alone cannot reject competing clicks before the next React render.
+    if (priceRefreshInFlight.current) return false;
+    priceRefreshInFlight.current = true;
+    setIsPriceRefreshing(true);
+    setRefreshingSymbol(symbol ?? null);
+    return true;
+  }
+
+  function endPriceRefresh() {
+    priceRefreshInFlight.current = false;
+    setIsPriceRefreshing(false);
+    setRefreshingSymbol(null);
+  }
+
   async function handleUpdatePrice(symbol: string) {
     if (demoMode) {
       toast({ title: "Demo prices are fixed", description: "The showcase never calls Alpha Vantage." });
@@ -159,15 +177,18 @@ export default function App() {
       toast({ title: "Sign in to update prices" });
       return;
     }
+    if (!beginPriceRefresh(symbol)) return;
     try {
       const result = await refreshOneSymbol(symbol);
       if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
       if (!result.ok) throw new Error(result.reason || "No quote available");
-      toast({ title: `${symbol} updated`, description: `${result.apiCalls} API calls used` });
       setPriceRefreshVersion((version) => version + 1);
-      mutate("/api/user");
+      await Promise.all([mutate("/api/prices"), mutate("/api/user")]);
+      toast({ title: `${symbol} updated`, description: `${result.apiCalls} API calls used` });
     } catch (error) {
-      toast({ title: "Price update failed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+      toast({ title: `${symbol} could not be updated`, description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally {
+      endPriceRefresh();
     }
   }
 
@@ -192,6 +213,7 @@ export default function App() {
       return;
     }
 
+    if (!beginPriceRefresh()) return;
     try {
       const results = await refreshSymbolsSequentially({
         symbols,
@@ -215,6 +237,8 @@ export default function App() {
       }
     } catch (error) {
       toast({ title: "Prices could not be refreshed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+    } finally {
+      endPriceRefresh();
     }
   }
 
@@ -241,12 +265,12 @@ export default function App() {
 
       <PortfolioOverview assets={assets} />
       <section aria-labelledby="assets-title">
-        <div className="flex items-center justify-between gap-4 mb-3"><h2 id="assets-title" className="text-2xl font-bold">Assets</h2><AssetControls handleUpdateValues={handleReloadPrices} onAdd={handleAddAsset} onSearch={handleSearchAndAddAsset} apiRemaining={apiRemaining} demoMode={demoMode} /></div>
+        <div className="flex items-center justify-between gap-4 mb-3"><h2 id="assets-title" className="text-2xl font-bold">Assets</h2><AssetControls handleUpdateValues={handleReloadPrices} onAdd={handleAddAsset} onSearch={handleSearchAndAddAsset} apiRemaining={apiRemaining} demoMode={demoMode} refreshDisabled={isPriceRefreshing} /></div>
         <div className="mb-6"><Filters showDeleted={showDeleted} onToggleDeleted={setShowDeleted} selectedTypes={selectedTypes} onToggleType={(type) => setSelectedTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} sortBy={sortBy} onSortChange={setSortBy} /></div>
-        {filteredAssets.length ? <AssetList assets={filteredAssets} sortBy={sortBy} handleUnDeleteAsset={(id) => setDeleted(id, false)} handleEditAsset={handleEditAsset} handleUpdatePrice={handleUpdatePrice} /> : <EmptyState hasFilters={selectedTypes.length > 0 || (!showDeleted && assets.some((asset) => asset.isDeleted))} onAdd={() => handleAddAsset()} onClear={() => { setSelectedTypes([]); setShowDeleted(true); }} />}
+        {filteredAssets.length ? <AssetList assets={filteredAssets} sortBy={sortBy} handleUnDeleteAsset={(id) => setDeleted(id, false)} handleEditAsset={handleEditAsset} handleUpdatePrice={handleUpdatePrice} priceRefreshDisabled={isPriceRefreshing || (!demoMode && apiRemaining <= 0)} refreshingSymbol={refreshingSymbol} /> : <EmptyState hasFilters={selectedTypes.length > 0 || (!showDeleted && assets.some((asset) => asset.isDeleted))} onAdd={() => handleAddAsset()} onClear={() => { setSelectedTypes([]); setShowDeleted(true); }} />}
       </section>
 
-      {!demoMode && <Prices />}
+      {!demoMode && <Prices refreshDisabled={isPriceRefreshing} onRefreshStart={beginPriceRefresh} onRefreshEnd={endPriceRefresh} />}
       {!demoMode && <div className="hidden"><ApiLimitBadge onRemainingChange={setApiRemaining} /></div>}
       <Footer><TotalValue value={assets.filter((asset) => !asset.isDeleted).reduce((sum, asset) => sum + (asset.value || 0), 0)} /></Footer>
       <AssetDialog open={dialogOpen} onOpenChange={setDialogOpen} initialValues={editingAsset} onSubmit={handleFormSubmit} onDelete={(id) => setDeleted(id, true)} onCancel={() => { setDialogOpen(false); setEditingAsset(null); }} isSaving={isSaving} />

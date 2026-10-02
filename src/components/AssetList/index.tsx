@@ -6,6 +6,8 @@ interface AssetListProps {
   handleEditAsset: (id: string | number) => void;
   handleUnDeleteAsset?: (id: string | number) => void;
   handleUpdatePrice?: (symbol: string) => void;
+  priceRefreshDisabled?: boolean;
+  refreshingSymbol?: string | null;
   sortBy?: "value" | "name" | "date";
 }
 
@@ -14,6 +16,8 @@ export default function AssetList({
   handleEditAsset,
   handleUnDeleteAsset,
   handleUpdatePrice,
+  priceRefreshDisabled,
+  refreshingSymbol,
   sortBy = "date",
 }: AssetListProps) {
   const sortedAssets = useMemo(() => {
@@ -43,6 +47,8 @@ export default function AssetList({
           handleUnDeleteAsset={handleUnDeleteAsset}
           handleEditAsset={handleEditAsset}
           handleUpdatePrice={handleUpdatePrice}
+          priceRefreshDisabled={priceRefreshDisabled}
+          isPriceRefreshing={refreshingSymbol === (asset.abb || asset.name || String(asset._id ?? asset.id))}
         />
       ))}
     </div>

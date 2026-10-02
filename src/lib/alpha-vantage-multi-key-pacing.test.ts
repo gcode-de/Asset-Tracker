@@ -217,7 +217,7 @@ it("preserves persisted request spacing when replacing an expired guard", async 
   const start = now;
   const fetcher = vi.fn(async () => Response.json({}));
   await (await createAlphaVantageClient("a@example.com", fetcher, timing)).request({ function: "GLOBAL_QUOTE" });
-  expect(now).toBe(start + 1500);
+  expect(now).toBe(start + 2000);
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 

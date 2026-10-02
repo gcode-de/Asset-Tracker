@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import useSWR from "swr";
 import { useSession } from "next-auth/react";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
@@ -36,11 +36,12 @@ interface FetchSummary {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-export default function Prices() {
+export default function Prices({ refreshDisabled = false, onRefreshStart, onRefreshEnd }: { refreshDisabled?: boolean; onRefreshStart?: () => boolean; onRefreshEnd?: () => void }) {
   const { data: session } = useSession();
   const { data: prices, mutate, error } = useSWR<Price[]>("/api/prices", fetcher);
   const { data: user } = useSWR(session ? "/api/user" : null, fetcher);
   const [saving, setSaving] = useState(false);
+  const refreshInFlight = useRef(false);
   const { toast } = useToast();
   const [timeSinceUpdate, setTimeSinceUpdate] = useState<string>("Never");
   const [remaining, setRemaining] = useState<number>(25);
@@ -124,6 +125,8 @@ export default function Prices() {
       return;
     }
 
+    if (refreshInFlight.current || (onRefreshStart && !onRefreshStart())) return;
+    refreshInFlight.current = true;
     try {
       setSaving(true);
       setRefreshProgress({ completed: 0, total: refreshableSymbols.length });
@@ -153,6 +156,8 @@ export default function Prices() {
       const message = e instanceof Error ? e.message : String(e);
       toast({ title: message, variant: "destructive" });
     } finally {
+      refreshInFlight.current = false;
+      onRefreshEnd?.();
       setSaving(false);
       setRefreshProgress(null);
       mutate();
@@ -189,7 +194,7 @@ export default function Prices() {
             </div>
           </div>
         </div>
-        <Button onClick={onFetchLatest} disabled={!session || saving || remaining <= 0} className="w-full">
+        <Button onClick={onFetchLatest} disabled={!session || saving || refreshDisabled || remaining <= 0} className="w-full">
           {saving ? (
             refreshProgress ? (
               <span className="flex items-center gap-2">

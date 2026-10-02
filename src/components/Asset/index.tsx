@@ -2,6 +2,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/componen
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Coins, TrendingUp, Wallet, RefreshCw } from "lucide-react";
+import { isRefreshableAssetType } from "@/lib/price-refresh";
 
 export interface AssetType {
   _id?: string | number;
@@ -23,9 +24,11 @@ interface AssetProps {
   handleEditAsset: (id: string | number) => void;
   handleUnDeleteAsset?: (id: string | number) => void;
   handleUpdatePrice?: (symbol: string) => void;
+  priceRefreshDisabled?: boolean;
+  isPriceRefreshing?: boolean;
 }
 
-export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, handleUpdatePrice }: AssetProps) {
+export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, handleUpdatePrice, priceRefreshDisabled = false, isPriceRefreshing = false }: AssetProps) {
   const bgForType = (type: string): string => {
     const key = (type ?? "")
       .toString()
@@ -121,15 +124,17 @@ export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, han
           </Button>
         ) : (
           <>
-            {handleUpdatePrice && (
+            {handleUpdatePrice && isRefreshableAssetType(asset.type) && (
               <Button
                 id={`${asset.id}-update-button`}
                 variant="ghost"
                 size="sm"
+                disabled={priceRefreshDisabled}
+                aria-busy={isPriceRefreshing}
                 onClick={() => handleUpdatePrice(asset.abb || asset.name || String(assetId))}
                 aria-label={`Update price for ${asset.name}`}
               >
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw className={`h-4 w-4 ${isPriceRefreshing ? "animate-spin" : ""}`} />
               </Button>
             )}
             <Button id={`${asset.id}-edit-button`} variant="link" size="sm" onClick={() => handleEditAsset(assetId)} aria-label={`Edit ${asset.name}`}>

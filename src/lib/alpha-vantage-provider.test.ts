@@ -21,10 +21,10 @@ it("paces a new client from persistent state while holding a lease", async () =>
   mocks.state.findOneAndUpdate.mockResolvedValue({ lastProviderRequestAt: new Date(10_000) });
   let now = 10_100;
   const wait = vi.fn(async (ms: number) => { now += ms; });
-  const fetcher = vi.fn().mockImplementation(async () => { expect(now).toBe(11_500); return Response.json({}); });
+  const fetcher = vi.fn().mockImplementation(async () => { expect(now).toBe(12_000); return Response.json({}); });
   const client = await createAlphaVantageClient("user@example.com", fetcher, { now: () => now, wait });
   await client.request({ function: "SYMBOL_SEARCH" });
-  expect(wait).toHaveBeenCalledWith(1400);
+  expect(wait).toHaveBeenCalledWith(1900);
   expect(mocks.state.findOneAndUpdate).toHaveBeenCalled();
 });
 

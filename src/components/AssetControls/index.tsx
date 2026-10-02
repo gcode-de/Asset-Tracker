@@ -11,9 +11,10 @@ interface AssetControlsProps {
   onSearch?: (symbol: string, name: string, assetClass?: string) => void;
   apiRemaining?: number;
   demoMode?: boolean;
+  refreshDisabled?: boolean;
 }
 
-export default function AssetControls({ handleUpdateValues, onAdd, onSearch, apiRemaining = 25, demoMode = false }: AssetControlsProps) {
+export default function AssetControls({ handleUpdateValues, onAdd, onSearch, apiRemaining = 25, demoMode = false, refreshDisabled = false }: AssetControlsProps) {
   const [updating, setUpdating] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -31,7 +32,7 @@ export default function AssetControls({ handleUpdateValues, onAdd, onSearch, api
   };
   return (
     <div className="flex gap-2 justify-end w-full">
-      <Button variant="outline" size="icon" aria-label="Refresh prices" onClick={onReload} disabled={updating || (!demoMode && apiRemaining <= 0)}>
+      <Button variant="outline" size="icon" aria-label="Refresh prices" onClick={onReload} disabled={updating || refreshDisabled || (!demoMode && apiRemaining <= 0)}>
         <RefreshCcw className={`h-4 w-4 ${updating ? "animate-spin" : ""}`} />
       </Button>
       <TooltipProvider>

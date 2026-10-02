@@ -47,8 +47,8 @@ it("paces quote, uncached FX, and search across separate clients without real ti
   await first.fxToEUR("USD");
   const second = await createAlphaVantageClient("user@example.com", fetcher, timing);
   await second.request({ function: "SYMBOL_SEARCH" });
-  expect(starts).toEqual([starts[0], starts[0] + 1500, starts[0] + 3000]);
-  expect(wait.mock.calls).toEqual([[1500], [1500]]);
+  expect(starts).toEqual([starts[0], starts[0] + 2000, starts[0] + 4000]);
+  expect(wait.mock.calls).toEqual([[2000], [2000]]);
   expect(count).toBe(3);
   expect(first.apiCalls).toBe(2); expect(second.apiCalls).toBe(1);
   expect(row.refreshLockId).toBeUndefined();
@@ -169,7 +169,7 @@ it("preserves pacing across a UTC date rollover", async () => {
   await (await createAlphaVantageClient("user@example.com", fetcher, timing)).request({ function: "GLOBAL_QUOTE" });
   now += 200; vi.setSystemTime(now);
   await (await createAlphaVantageClient("user@example.com", fetcher, timing)).request({ function: "SYMBOL_SEARCH" });
-  expect(wait).toHaveBeenCalledWith(1300); expect(count).toBe(2);
+  expect(wait).toHaveBeenCalledWith(1800); expect(count).toBe(2);
   const dates = mocks.counter.findOneAndUpdate.mock.calls.filter(([, update]) => update.$inc).map(([filter]) => filter.date);
   expect(dates).toEqual(["2026-10-02", "2026-10-03"]);
 });

@@ -13,7 +13,7 @@ export const PROVIDER_LEASE_MS = 30_000;
 // later caller to encounter another provider block. Durable cooldowns still win.
 export const PROVIDER_PENDING_MS = 120_000;
 // Conservative app policy, NOT a documented universal free-tier interval.
-export const PROVIDER_MIN_INTERVAL_MS = 1_500;
+export const PROVIDER_MIN_INTERVAL_MS = 2_000;
 const defaultTiming = { now: () => Date.now(), wait: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) };
 const fingerprint = (key: string) => crypto.createHash("sha256").update(key).digest("hex");
 const today = (now = Date.now()) => new Date(now).toISOString().split("T")[0];
