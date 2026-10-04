@@ -19,7 +19,8 @@ vi.mock("@/components/AssetDialog", () => ({ default: () => null }));
 vi.mock("@/components/AssetSearchDialog", () => ({ default: () => null }));
 vi.mock("@/components/ApiLimitBadge", () => ({ default: () => null }));
 
-beforeEach(() => { vi.clearAllMocks(); });
+const originalAssets = mocks.user.assets;
+beforeEach(() => { vi.clearAllMocks(); mocks.user.assets = originalAssets; });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function setupPendingRefresh() {
@@ -100,4 +101,31 @@ it.each(["Refresh prices", "Fetch latest prices"])("prevents same-tick asset cli
   await waitFor(() => expect(stock).toBeEnabled());
   expect(refreshCalls()).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Fetch latest prices" })).toBeEnabled();
+});
+
+it.each(["XAUUSD", "XAGUSD"])("submits the exact %s symbol from its individual metal card", async (symbol) => {
+  mocks.user.assets = [{ ...originalAssets[0], _id: "metal-id", name: "Metal holding", abb: symbol, type: "metals" }];
+  const { resolve, refreshCalls } = setupPendingRefresh();
+  fireEvent.click(await screen.findByRole("button", { name: "Update price for Metal holding" }));
+  expect(refreshCalls()[0]).toEqual(["/api/prices/fetch", expect.objectContaining({ body: JSON.stringify({ symbol }) })]);
+  await act(async () => resolve(Response.json({ apiCalls: 1, remainingCalls: 24, results: [{ symbol, ok: true }] })));
+  expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: `${symbol} updated` }));
+  expect(mocks.mutate).toHaveBeenCalledWith("/api/prices");
+});
+
+it.each(["Refresh prices", "Fetch latest prices"])("includes gold/silver but not platinum in the %s batch", async (name) => {
+  mocks.user.assets = ["XAUUSD", "XAGUSD", "XPTUSD"].map((abb) => ({ ...originalAssets[0], _id: abb, name: abb, abb, type: "metals" }));
+  const { resolve, refreshCalls } = setupPendingRefresh();
+  fireEvent.click(await screen.findByRole("button", { name }));
+  expect(refreshCalls()).toHaveLength(1);
+  expect(refreshCalls()[0]).toEqual(["/api/prices/fetch", expect.objectContaining({ body: JSON.stringify({ symbol: "XAUUSD" }) })]);
+  await act(async () => resolve(Response.json({ apiCalls: 2, remainingCalls: 23, results: [{ symbol: "XAUUSD", ok: true }] })));
+  expect(refreshCalls()).toHaveLength(2);
+  expect(refreshCalls()[1]).toEqual(["/api/prices/fetch", expect.objectContaining({ body: JSON.stringify({ symbol: "XAGUSD" }) })]);
+  await act(async () => resolve(Response.json({ apiCalls: 1, remainingCalls: 22, results: [{ symbol: "XAGUSD", ok: true }] })));
+  expect(refreshCalls()).toHaveLength(2);
+  expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "XAUUSD updated" }));
+  expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "XAGUSD updated" }));
+  expect(screen.getByRole("button", { name })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Update price for XPTUSD" })).not.toBeInTheDocument();
 });

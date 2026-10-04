@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AssetType } from "@/components/Asset";
 import { AlertCircle } from "lucide-react";
+import { preciousMetalSymbol } from "@/lib/price-refresh";
 
 interface FormProps {
   onFormSubmit?: (e: FormEvent<HTMLFormElement>) => void;
@@ -51,6 +52,7 @@ export default function Form({ onFormSubmit, resetForm, formId = "asset-form", h
   // Check if asset type needs a symbol for automatic price fetching
   const needsSymbolForPrices = ["metals", "cash", "real_estate"].includes(selectedType);
   const showSymbolWarning = needsSymbolForPrices && !abb?.trim();
+  const isMetal = preciousMetalSymbol({ type: selectedType, abb }) !== undefined;
 
   return (
     <div className="space-y-4">
@@ -91,13 +93,19 @@ export default function Form({ onFormSubmit, resetForm, formId = "asset-form", h
           )}
         </div>
 
+        {isMetal && (
+          <p className="text-xs text-muted-foreground" role="status">
+            Gold/silver spot refresh uses EUR per troy ounce. Enter quantities in troy ounces, not grams. Existing quantities are not converted automatically.
+          </p>
+        )}
+
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="qtyField">Units *</Label>
+            <Label htmlFor="qtyField">{isMetal ? "Units (troy oz) *" : "Units *"}</Label>
             <Input required id="qtyField" name="quantity" type="number" step="any" min="0" value={qty} onChange={handleQtyChange} placeholder="0.05" />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="basePriceField">Unit Price *</Label>
+            <Label htmlFor="basePriceField">{isMetal ? "Unit Price (€/troy oz) *" : "Unit Price *"}</Label>
             <Input
               required
               id="basePriceField"

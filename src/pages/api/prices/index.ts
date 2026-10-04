@@ -42,6 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             currency: { $first: "$currency" },
             timestamp: { $first: "$timestamp" },
             source: { $first: "$source" },
+            unit: { $first: "$unit" },
             // Use last update time as the "Recorded" timestamp shown in UI
             recordedAt: { $first: "$updatedAt" },
           },

@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { NextApiRequest, NextApiResponse } from "next";
 const mocks = vi.hoisted(() => ({ state: { findOne: vi.fn(), findOneAndUpdate: vi.fn(), updateOne: vi.fn() }, counter: { findOne: vi.fn(), findOneAndUpdate: vi.fn(), updateOne: vi.fn() }, keys: vi.fn(), fx: { findOne: vi.fn(), findOneAndUpdate: vi.fn() } }));
 vi.mock("@/db/models/AlphaVantageState", () => ({ default: mocks.state }));
 vi.mock("@/db/models/ApiCounter", () => ({ default: mocks.counter }));
 vi.mock("@/db/models/FxRate", () => ({ default: mocks.fx }));
 vi.mock("@/lib/alpha-vantage-key-resolver", () => ({ resolveAlphaVantageKeys: mocks.keys }));
 import { createAlphaVantageClient, PROVIDER_LEASE_MS, PROVIDER_MIN_INTERVAL_MS, PROVIDER_TIMEOUT_MS } from "./alpha-vantage-provider";
+import * as providerModule from "./alpha-vantage-provider";
+const routeMocks = vi.hoisted(() => ({ user: vi.fn(), price: vi.fn() }));
+vi.mock("@/db/connect", () => ({ default: vi.fn() }));
+vi.mock("@/db/models/User", () => ({ default: { findOne: routeMocks.user } }));
+vi.mock("@/db/models/Price", () => ({ default: { findOneAndUpdate: routeMocks.price } }));
+vi.mock("next-auth/next", () => ({ getServerSession: vi.fn(async () => ({ user: { email: "user@example.com" } })) }));
+vi.mock("@/pages/api/auth/[...nextauth]", () => ({ authOptions: {} }));
+import refreshMetal from "@/pages/api/prices/fetch";
 
 let now: number;
 let row: Record<string, any>;
@@ -37,7 +46,7 @@ beforeEach(() => {
   });
   mocks.counter.updateOne.mockImplementation(async (_filter, update) => { count += update.$inc?.count ?? 0; return { matchedCount: 1 }; });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it("paces quote, uncached FX, and search across separate clients without real timers", async () => {
   const starts: number[] = [];
@@ -189,4 +198,78 @@ it.each(["nonsense", "-1", "999999999", "Fri, 02 Oct 2026 12:00:30 GMT"])("bound
   const expected = header === "999999999" ? 86400 : header.includes("GMT") ? 30 : 60;
   await expect(client.request({ function: "GLOBAL_QUOTE" })).rejects.toMatchObject({ code: "ALPHA_RATE_LIMIT_UNKNOWN", retryAfter: expected });
   expect(count).toBe(1); expect(wait).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["XAUUSD", false], ["XAUUSD", true], ["XAGUSD", false], ["XAGUSD", true],
+])("metal route counts actual spot/FX reservations for %s with cached FX=%s", async (symbol, cached) => {
+  routeMocks.user.mockResolvedValue({ assets: [{ abb: symbol, type: "metals" }] });
+  routeMocks.price.mockImplementation(async (_filter, update) => update);
+  if (cached) mocks.fx.findOne.mockResolvedValue({ rate: 0.9, timestamp: new Date() });
+  const starts: number[] = [];
+  // Synthetic price fixture; response schema comes from the public silver demo.
+  const fetcher = vi.fn(async (url: string | URL | Request) => {
+    starts.push(now);
+    const params = new URL(String(url)).searchParams;
+    return Response.json(params.get("function") === "GOLD_SILVER_SPOT"
+      ? { nominal: symbol, timestamp: "2026-10-04 19:56:11", price: "100" }
+      : { "Realtime Currency Exchange Rate": { "5. Exchange Rate": "0.9" } });
+  });
+  const realCreateClient = createAlphaVantageClient;
+  vi.spyOn(providerModule, "createAlphaVantageClient").mockImplementation((email) => realCreateClient(email, fetcher, timing));
+  const res = { status: vi.fn(), json: vi.fn(), setHeader: vi.fn() };
+  res.status.mockReturnValue(res);
+  await refreshMetal({ method: "POST", body: { symbol } } as NextApiRequest, res as unknown as NextApiResponse);
+  const calls = cached ? 1 : 2;
+  expect(count).toBe(calls);
+  expect(fetcher).toHaveBeenCalledTimes(calls);
+  expect(new URL(String(fetcher.mock.calls[0][0])).searchParams.get("function")).toBe("GOLD_SILVER_SPOT");
+  expect(new URL(String(fetcher.mock.calls[0][0])).searchParams.get("symbol")).toBe(symbol === "XAUUSD" ? "XAU" : "XAG");
+  if (!cached) {
+    expect(starts[1] - starts[0]).toBe(2000);
+    expect(wait).toHaveBeenCalledWith(2000);
+    const fx = new URL(String(fetcher.mock.calls[1][0])).searchParams;
+    expect(fx.get("function")).toBe("CURRENCY_EXCHANGE_RATE");
+    expect(fx.get("from_currency")).toBe("USD");
+    expect(fx.get("to_currency")).toBe("EUR");
+  }
+  expect(res.json.mock.calls[0][0]).toMatchObject({ fetched: 1, apiCalls: calls, remainingCalls: 25 - calls, results: [{ symbol, ok: true, price: { symbol, value: 90, currency: "EUR", source: "alphavantage", unit: "troy_ounce" } }] });
+  expect(JSON.stringify(res.json.mock.calls[0][0])).not.toContain("private-test-key");
+});
+
+it.each([
+  [{ Information: "Daily request limit exhausted. private-test-key" }, "ALPHA_RATE_LIMIT_DAILY", 3600],
+  [{ "Error Message": "invalid private-test-key" }, "ALPHA_INVALID", undefined],
+  [{ nominal: "XAGUSD", timestamp: "2026-10-04 19:56:11", price: "Infinity" }, "No valid price", undefined],
+])("retains actual attempt accounting but never writes a failed metal quote %j", async (body, reason, retryAfter) => {
+  routeMocks.user.mockResolvedValue({ assets: [{ abb: "XAGUSD", type: "metals" }] });
+  const fetcher = vi.fn(async () => Response.json(body));
+  const realCreateClient = createAlphaVantageClient;
+  vi.spyOn(providerModule, "createAlphaVantageClient").mockImplementation((email) => realCreateClient(email, fetcher, timing));
+  const res = { status: vi.fn(), json: vi.fn(), setHeader: vi.fn() };
+  res.status.mockReturnValue(res);
+  await refreshMetal({ method: "POST", body: { symbol: "XAGUSD" } } as NextApiRequest, res as unknown as NextApiResponse);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(count).toBe(1);
+  expect(routeMocks.price).not.toHaveBeenCalled();
+  expect(res.json.mock.calls[0][0]).toMatchObject({ fetched: 0, apiCalls: 1, remainingCalls: 24, results: [{ symbol: "XAGUSD", ok: false, reason: expect.stringContaining(String(reason)) }] });
+  if (retryAfter) expect(res.setHeader).toHaveBeenCalledWith("Retry-After", String(retryAfter));
+  expect(JSON.stringify(res.json.mock.calls[0][0])).not.toContain("private-test-key");
+});
+
+it.each(["Infinity", "NaN", "0", "-1"])("does not overwrite the metal price when uncached EUR FX returns %s", async (rate) => {
+  routeMocks.user.mockResolvedValue({ assets: [{ abb: "XAUUSD", type: "metals" }] });
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(Response.json({ nominal: "XAUUSD", timestamp: "2026-10-04 19:56:11", price: "100" }))
+    .mockResolvedValueOnce(Response.json({ "Realtime Currency Exchange Rate": { "5. Exchange Rate": rate } }));
+  const realCreateClient = createAlphaVantageClient;
+  vi.spyOn(providerModule, "createAlphaVantageClient").mockImplementation((email) => realCreateClient(email, fetcher, timing));
+  const res = { status: vi.fn(), json: vi.fn(), setHeader: vi.fn() };
+  res.status.mockReturnValue(res);
+  await refreshMetal({ method: "POST", body: { symbol: "XAUUSD" } } as NextApiRequest, res as unknown as NextApiResponse);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(count).toBe(2);
+  expect(routeMocks.price).not.toHaveBeenCalled();
+  expect(mocks.fx.findOneAndUpdate).not.toHaveBeenCalled();
+  expect(res.json.mock.calls[0][0]).toMatchObject({ fetched: 0, apiCalls: 2, remainingCalls: 23, results: [{ symbol: "XAUUSD", ok: false, reason: expect.stringContaining("ALPHA_INVALID") }] });
 });

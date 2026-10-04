@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "./price-refresh";
+import { collectRefreshableSymbols, isRefreshableAsset, refreshSymbolsSequentially, summarizeRefreshResults } from "./price-refresh";
 
 it("summarizes actual quote/FX attempts and the final aggregate remaining allowance", () => {
   expect(summarizeRefreshResults([
@@ -16,6 +16,39 @@ it("keeps aggregate usage unknown when any request has unknown accounting", () =
 });
 
 describe("collectRefreshableSymbols", () => {
+  it("prevents provider commodity names from colliding with equity tickers in the symbol-only cache", () => {
+    expect(isRefreshableAsset({ abb: "GOLD", type: "metals" })).toBe(false);
+    expect(isRefreshableAsset({ abb: "SILVER", type: "metals" })).toBe(false);
+    expect(isRefreshableAsset({ abb: "GOLD", type: "stocks" })).toBe(true);
+    expect(isRefreshableAsset({ abb: "XAU", type: "stocks" })).toBe(false);
+    expect(isRefreshableAsset({ abb: "XAG", type: "crypto" })).toBe(false);
+  });
+  it("includes only exact gold/silver aliases on supported metal holdings without rewriting cache symbols", () => {
+    expect(collectRefreshableSymbols([
+      { abb: "XAUUSD", type: "metals" },
+      { abb: "XAGUSD", type: "metal" },
+      { abb: "XAU", type: "precious_metal" },
+      { abb: "XAG", type: "metals" },
+      { abb: "GOLD", type: "metals" },
+      { abb: "SILVER", type: "metals" },
+      { abb: "XPTUSD", type: "metals" },
+      { abb: "UNKNOWN", type: "metals" },
+      { abb: "XAU/USD", type: "metals" },
+      { abb: "XAUUSD", type: "cash" },
+      { abb: "XAGUSD", type: "real_estate" },
+      { abb: "AAPL", type: "stocks" },
+      { abb: "BTC", type: "crypto" },
+      { abb: "XAUUSD", type: "metals", isDeleted: true },
+    ])).toEqual(["XAUUSD", "XAGUSD", "XAU", "XAG", "AAPL", "BTC"]);
+  });
+  it("does not route USD metal pairs marked as stocks or crypto through equity/FX endpoints", () => {
+    expect(collectRefreshableSymbols([
+      { abb: "XAUUSD", type: "stocks" },
+      { abb: "XAGUSD", type: "crypto" },
+      { abb: "XAUUSD ", type: "metals" },
+      { abb: "GOLD", type: "stocks" }, // GOLD is also a real equity ticker.
+    ])).toEqual(["GOLD"]);
+  });
   it("deduplicates supported symbols and refreshes the stalest price first", () => {
     const symbols = collectRefreshableSymbols(
       [

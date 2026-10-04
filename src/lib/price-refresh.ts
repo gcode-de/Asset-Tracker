@@ -38,6 +38,28 @@ export function isRefreshableAssetType(type: unknown): boolean {
   return refreshableAssetTypes.has(String(type || "").trim().toLowerCase());
 }
 
+const metalAssetTypes = new Set(["metals", "metal", "precious_metal"]);
+
+/** ISO metal aliases plus existing USD pairs; English names collide with equity tickers. */
+export function preciousMetalSymbol(asset: RefreshableAsset): "XAU" | "XAG" | undefined {
+  if (!metalAssetTypes.has(String(asset.type || "").trim().toLowerCase())) return undefined;
+  switch (String(asset.abb || asset.name || asset.id || "").toUpperCase()) {
+    case "XAUUSD":
+    case "XAU": return "XAU";
+    case "XAGUSD":
+    case "XAG": return "XAG";
+    default: return undefined;
+  }
+}
+
+export function isRefreshableAsset(asset: RefreshableAsset): boolean {
+  if (asset.isDeleted) return false;
+  if (preciousMetalSymbol(asset)) return true;
+  // Reserve supported metal cache identities for metal holdings only.
+  if (["XAUUSD", "XAGUSD", "XAU", "XAG"].includes(symbolFor(asset))) return false;
+  return isRefreshableAssetType(asset.type);
+}
+
 function symbolFor(asset: RefreshableAsset): string {
   return String(asset.abb || asset.name || asset.id || "").trim().toUpperCase();
 }
@@ -49,8 +71,7 @@ export function collectRefreshableSymbols(
   const uniqueSymbols = new Set<string>();
 
   for (const asset of assets) {
-    if (asset.isDeleted) continue;
-    if (!isRefreshableAssetType(asset.type)) continue;
+    if (!isRefreshableAsset(asset)) continue;
 
     const symbol = symbolFor(asset);
     if (symbol) uniqueSymbols.add(symbol);

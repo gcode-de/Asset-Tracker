@@ -2,7 +2,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/componen
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Coins, TrendingUp, Wallet, RefreshCw } from "lucide-react";
-import { isRefreshableAssetType } from "@/lib/price-refresh";
+import { isRefreshableAsset, preciousMetalSymbol } from "@/lib/price-refresh";
 
 export interface AssetType {
   _id?: string | number;
@@ -55,6 +55,7 @@ export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, han
   };
 
   const assetId = asset._id ?? asset.id;
+  const isMetal = preciousMetalSymbol(asset) !== undefined;
 
   return (
     <Card id={String(assetId)} className={`overflow-hidden h-full flex flex-col ${asset.isDeleted ? "opacity-50" : ""}`} role="article" aria-labelledby={`asset-${assetId}-title`}>
@@ -95,7 +96,7 @@ export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, han
           <div className="p-2 bg-muted/50 rounded-md">
             <div className="flex min-w-0">
               <Coins className="h-4 w-4 text-muted-foreground mt-0.5 mr-1 flex-shrink-0" />
-              <div className="text-xs text-muted-foreground">Units</div>
+              <div className="text-xs text-muted-foreground">{isMetal ? "Units (troy oz)" : "Units"}</div>
             </div>
             <div className="font-semibold">{asset.quantity?.toLocaleString("de-DE")}</div>
           </div>
@@ -103,7 +104,7 @@ export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, han
           <div className="p-2 bg-muted/50 rounded-md">
             <div className="flex min-w-0">
               <TrendingUp className="h-4 w-4 text-muted-foreground mt-0.5 mr-1 flex-shrink-0" />
-              <div className="text-xs text-muted-foreground">Unit Price</div>
+              <div className="text-xs text-muted-foreground">{isMetal ? "Unit Price (€/troy oz)" : "Unit Price"}</div>
             </div>
             <div className="font-semibold">{asset.baseValue?.toLocaleString("de-DE")} €</div>
           </div>
@@ -124,7 +125,7 @@ export default function Asset({ asset, handleEditAsset, handleUnDeleteAsset, han
           </Button>
         ) : (
           <>
-            {handleUpdatePrice && isRefreshableAssetType(asset.type) && (
+            {handleUpdatePrice && isRefreshableAsset(asset) && (
               <Button
                 id={`${asset.id}-update-button`}
                 variant="ghost"

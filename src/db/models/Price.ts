@@ -6,6 +6,7 @@ export interface IPrice extends Document {
   currency: string;
   timestamp: Date;
   source?: string;
+  unit?: "troy_ounce";
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -17,6 +18,7 @@ const priceSchema = new Schema<IPrice>(
     currency: { type: String, default: "USD" },
     timestamp: { type: Date, default: Date.now },
     source: { type: String },
+    unit: { type: String, enum: ["troy_ounce"] },
   },
   { timestamps: true }
 );

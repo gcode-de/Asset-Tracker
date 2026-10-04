@@ -29,6 +29,100 @@ describe("market data route seams", () => {
     mocks.request.mockResolvedValue({ "Global Quote": { "05. price": "100" } });
     mocks.fx.mockResolvedValue(0.9); mocks.price.mockResolvedValue({ value: 90, currency: "EUR" });
   });
+  it("refreshes XAUUSD via the documented spot endpoint and preserves the EUR per-troy-ounce cache identity", async () => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: "XAUUSD", type: "metals", quantity: 2 }] });
+    // Synthetic gold fixture using the official silver demo's flat response schema.
+    mocks.request.mockResolvedValue({ nominal: "XAUUSD", timestamp: "2026-10-04 19:56:11", price: "3000" });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol: "XAUUSD" } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(mocks.request).toHaveBeenCalledWith({ function: "GOLD_SILVER_SPOT", symbol: "XAU" });
+    expect(mocks.fx).toHaveBeenCalledWith("USD");
+    expect(mocks.price).toHaveBeenCalledWith({ symbol: "XAUUSD" }, expect.objectContaining({ symbol: "XAUUSD", value: 2700, currency: "EUR", unit: "troy_ounce", source: "alphavantage" }), expect.any(Object));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ fetched: 1, apiCalls: 2, remainingCalls: 24, results: [expect.objectContaining({ symbol: "XAUUSD", ok: true })] }));
+  });
+  it.each([
+    { price: "100" },
+    { nominal: "XAGUSD", timestamp: "2026-10-04 19:56:11", price: "100" },
+    { nominal: "XAUEUR", timestamp: "2026-10-04 19:56:11", price: "100" },
+    { nominal: "XAUUSD", price: "100" },
+    { nominal: "XAUUSD", timestamp: "2026-10-04 19:56:11", price: true },
+    { nominal: "XAUUSD", timestamp: "2026-10-04 19:56:11", price: [100] },
+  ])("rejects malformed or wrong-denomination metal data without FX or a cache write: %j", async (data) => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: "XAUUSD", type: "metals" }] });
+    mocks.request.mockResolvedValue(data);
+    const res = response();
+    await refresh({ method: "POST", body: { symbol: "XAUUSD" } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(mocks.price).not.toHaveBeenCalled();
+    expect(mocks.fx).not.toHaveBeenCalled();
+    expect(res.json.mock.calls[0][0]).toMatchObject({ fetched: 0, results: [{ symbol: "XAUUSD", ok: false }] });
+  });
+  it.each([
+    ["XAGUSD", "metals", "XAG", "XAGUSD"],
+    ["XAU", "metal", "XAU", "XAUUSD"],
+    ["XAG", "metals", "XAG", "XAGUSD"],
+  ])("maps %s only for provider lookup while keeping the user's cache symbol", async (symbol, type, providerSymbol, nominal) => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: symbol, type }] });
+    // Synthetic price; flat nominal/timestamp/price schema observed in the official public silver demo.
+    mocks.request.mockResolvedValue({ nominal, timestamp: "2026-10-04 19:56:11", price: "60.3876771722" });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(mocks.request).toHaveBeenCalledExactlyOnceWith({ function: "GOLD_SILVER_SPOT", symbol: providerSymbol });
+    expect(mocks.fx).toHaveBeenCalledWith("USD");
+    expect(mocks.price).toHaveBeenCalledWith({ symbol }, expect.objectContaining({ symbol, value: expect.closeTo(54.34890945498), currency: "EUR", unit: "troy_ounce", source: "alphavantage" }), expect.any(Object));
+    expect(res.json.mock.calls[0][0]).toMatchObject({ fetched: 1, results: [{ symbol, ok: true }] });
+  });
+  it.each(["NaN", "Infinity", "0", "-1", "", null, undefined])("does not convert or cache invalid spot price %s", async (price) => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: "XAGUSD", type: "metals" }] });
+    mocks.request.mockResolvedValue({ nominal: "XAGUSD", timestamp: "2026-10-04 19:56:11", price });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol: "XAGUSD" } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(mocks.fx).not.toHaveBeenCalled();
+    expect(mocks.price).not.toHaveBeenCalled();
+    expect(res.json.mock.calls[0][0]).toMatchObject({ fetched: 0, results: [{ symbol: "XAGUSD", ok: false }] });
+  });
+  it.each([
+    ["XPTUSD", "metals"], ["PLATINUM", "metal"], ["UNKNOWN", "precious_metal"],
+    ["GOLD", "metals"], ["SILVER", "metals"], ["XAU", "stocks"], ["XAG", "crypto"],
+    ["XAUUSD", "cash"], ["XAGUSD", "real_estate"], ["XAUUSD", "stocks"], ["XAGUSD", "crypto"],
+    ["XAU/USD", "metals"], ["XAUUSD ", "metals"],
+  ])("rejects unsupported symbol/type %s/%s before creating a quota-governed provider client", async (symbol, type) => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: symbol, type }] });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(mocks.client).not.toHaveBeenCalled();
+    expect(mocks.price).not.toHaveBeenCalled();
+  });
+  it("requires the exact user-owned metal symbol rather than silently substituting a provider alias", async () => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: "XAUUSD", type: "metals" }] });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol: "XAU" } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(mocks.client).not.toHaveBeenCalled();
+  });
+  it("keeps GOLD equities separate by refusing ambiguous GOLD metal aliases, even when a metal holding comes first", async () => {
+    mocks.user.mockResolvedValue({ assets: [{ abb: "GOLD", type: "metals" }, { abb: "GOLD", type: "stocks" }] });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol: "GOLD" } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(mocks.request).toHaveBeenCalledExactlyOnceWith({ function: "GLOBAL_QUOTE", symbol: "GOLD" });
+    expect(mocks.price.mock.calls[0][1]).not.toHaveProperty("unit");
+    // Another user's metal alias cannot overwrite the shared equity price.
+    mocks.user.mockResolvedValue({ assets: [{ abb: "GOLD", type: "metals" }] });
+    const metalRes = response();
+    await refresh({ method: "POST", body: { symbol: "GOLD" } } as NextApiRequest, metalRes as unknown as NextApiResponse);
+    expect(metalRes.status).toHaveBeenCalledWith(404);
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    expect(mocks.price).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the crypto EUR exchange-rate path unchanged", async () => {
+    mocks.request.mockResolvedValue({ "Realtime Currency Exchange Rate": { "5. Exchange Rate": "100" } });
+    const res = response();
+    await refresh({ method: "POST", body: { symbol: "BTC" } } as NextApiRequest, res as unknown as NextApiResponse);
+    expect(mocks.request).toHaveBeenCalledWith({ function: "CURRENCY_EXCHANGE_RATE", from_currency: "BTC", to_currency: "EUR" });
+    expect(mocks.fx).not.toHaveBeenCalled();
+    expect(mocks.price).toHaveBeenCalledWith({ symbol: "BTC" }, expect.objectContaining({ value: 100, currency: "EUR" }), expect.any(Object));
+    expect(mocks.price.mock.calls[0][1]).not.toHaveProperty("unit");
+  });
   it("refresh returns aggregate quota and persists the converted quote", async () => {
     const res = response();
     await refresh({ method: "POST", body: { symbol: "AAPL" } } as NextApiRequest, res as unknown as NextApiResponse);
