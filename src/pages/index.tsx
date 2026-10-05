@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { AssetType } from "@/components/Asset";
 import { demoAssets, readDemoAssets, writeDemoAssets, DEMO_STORAGE_KEY } from "@/lib/demo";
-import useSWR, { mutate } from "swr";
+import { usePortfolioData, type CachedPrice } from "@/hooks/use-portfolio-data";
 import axios from "axios";
 import { useEffect, useState, useRef, FormEvent, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
@@ -23,18 +23,30 @@ import Link from "next/link";
 import { AlertCircle, ArrowRight, Database, RotateCcw, WalletCards } from "lucide-react";
 import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "@/lib/price-refresh";
 
-interface UserData {
-  _id: string;
-  email: string;
-  assets: AssetType[];
+function mergeCachedPrices(holdings: AssetType[], prices?: CachedPrice[]) {
+  if (!prices) return holdings;
+  const priceMap = new Map(prices.map((price) => [price.symbol.toUpperCase(), price]));
+  return holdings.map((asset) => {
+    const price = priceMap.get(String(asset.abb || "").toUpperCase());
+    return price ? { ...asset, baseValue: price.value, value: (asset.quantity || 0) * price.value, priceUpdatedAt: price.recordedAt || price.timestamp } : asset;
+  });
 }
 
 export default function App() {
   const router = useRouter();
+  const { data: session, status } = useSession();
+  const demoMode = router.isReady && router.query.demo === "true";
+  // Remount all local holdings, dialogs and pending refresh state on identity changes.
+  const identity = demoMode ? "demo" : status === "authenticated" ? session?.user?.email : status;
+  return <PortfolioApp key={identity} />;
+}
+
+function PortfolioApp() {
+  const router = useRouter();
   const demoMode = router.isReady && router.query.demo === "true";
   const { toast } = useToast();
   const { data: session, status: sessionStatus } = useSession();
-  const [assets, setAssets] = useState<AssetType[]>([]);
+  const [localAssets, setLocalAssets] = useState<{ assets: AssetType[]; priceSnapshot?: CachedPrice[] } | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Partial<AssetType> | null>(null);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -42,7 +54,6 @@ export default function App() {
   const [sortBy, setSortBy] = useState<"value" | "name" | "date">("value");
   const [apiRemaining, setApiRemaining] = useState(25);
   const [isSaving, setIsSaving] = useState(false);
-  const [priceRefreshVersion, setPriceRefreshVersion] = useState(0);
   const priceRefreshInFlight = useRef(false);
   const [isPriceRefreshing, setIsPriceRefreshing] = useState(false);
   const [refreshingSymbol, setRefreshingSymbol] = useState<string | null>(null);
@@ -51,43 +62,37 @@ export default function App() {
     () => axios.create({ baseURL: "/api", headers: { "Content-Type": "application/json" } }),
     [],
   );
-  const { data: user, error: userError, isLoading } = useSWR<UserData>(router.isReady && !demoMode && sessionStatus === "authenticated" ? "/api/user" : null);
+  const portfolio = usePortfolioData(router.isReady && !demoMode && sessionStatus === "authenticated" ? session?.user?.email ?? null : null);
+  const { data: user, error: userError, mutate: revalidateUser } = portfolio.user;
+  const { data: prices, error: pricesError, mutate: revalidatePrices } = portfolio.prices;
+  const assets = useMemo(() => {
+    const holdings = demoMode ? localAssets?.assets ?? [] : user?.assets ?? [];
+    // A saved manual price wins over the pre-save quote only until the next
+    // authoritative holdings/price snapshot. Never mask later server holdings.
+    if (demoMode || !prices || (localAssets?.assets === holdings && localAssets.priceSnapshot === prices)) return holdings;
+    return mergeCachedPrices(holdings, prices);
+  }, [demoMode, user, localAssets, prices]);
 
-  useEffect(() => {
-    if (demoMode) setAssets(readDemoAssets());
-  }, [demoMode]);
-
-  useEffect(() => {
-    if (!user || demoMode) return;
-    let cancelled = false;
-
-    async function loadPrices() {
-      try {
-        const response = await fetch("/api/prices");
-        if (!response.ok) throw new Error("Prices could not be loaded");
-        const prices = await response.json();
-        if (!Array.isArray(prices)) throw new Error("Unexpected price response");
-        const priceMap = new Map(
-          prices.map((price) => [String(price.symbol || "").toUpperCase(), { value: price.value, updatedAt: price.recordedAt || price.timestamp }]),
-        );
-        const merged = user.assets.map((asset) => {
-          const price = priceMap.get(String(asset.abb || "").toUpperCase());
-          return price
-            ? { ...asset, baseValue: price.value, value: (asset.quantity || 0) * price.value, priceUpdatedAt: price.updatedAt }
-            : asset;
-        });
-        if (!cancelled) setAssets(merged);
-      } catch {
-        if (!cancelled) {
-          setAssets(user.assets);
-          toast({ title: "Saved assets loaded", description: "Live prices are temporarily unavailable." });
-        }
-      }
+  // A bound cache mutation fences reads started before this successful CRUD.
+  // Future reads remain authoritative, and Prices sees the same holdings as cards.
+  const setAssets = (update: AssetType[] | ((current: AssetType[]) => AssetType[])) => {
+    if (demoMode) {
+      setLocalAssets((current) => ({ assets: typeof update === "function" ? update(current?.assets ?? []) : update }));
+      return;
     }
+    void revalidateUser((current) => {
+      if (!current) return current;
+      const holdings = localAssets?.assets === current.assets && localAssets.priceSnapshot === prices
+        ? current.assets : mergeCachedPrices(current.assets, prices);
+      const next = typeof update === "function" ? update(holdings) : update;
+      setLocalAssets({ assets: next, priceSnapshot: prices });
+      return { ...current, assets: next };
+    }, { revalidate: false });
+  };
 
-    loadPrices();
-    return () => { cancelled = true; };
-  }, [demoMode, priceRefreshVersion, toast, user]);
+  useEffect(() => {
+    if (demoMode) setLocalAssets({ assets: readDemoAssets() });
+  }, [demoMode]);
 
   const updateDemoAssets = (updater: (current: AssetType[]) => AssetType[]) => {
     setAssets((current) => {
@@ -182,8 +187,7 @@ export default function App() {
       const result = await refreshOneSymbol(symbol);
       if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
       if (!result.ok) throw new Error(result.reason || "No quote available");
-      setPriceRefreshVersion((version) => version + 1);
-      await Promise.all([mutate("/api/prices"), mutate("/api/user")]);
+      await Promise.all([revalidatePrices(), revalidateUser()]);
       toast({ title: `${symbol} updated`, description: `${result.apiCalls} API calls used` });
     } catch (error) {
       toast({ title: `${symbol} could not be updated`, description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
@@ -218,9 +222,9 @@ export default function App() {
       const results = await refreshSymbolsSequentially({
         symbols,
         refreshSymbol: refreshOneSymbol,
-        onResult: (result) => {
+        onResult: async (result) => {
           if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
-          if (result.ok) setPriceRefreshVersion((version) => version + 1);
+          if (result.ok) await revalidatePrices();
           toast(
             result.ok
               ? { title: `${result.symbol} updated`, description: `${result.apiCalls} API call${result.apiCalls === 1 ? "" : "s"} used` }
@@ -228,8 +232,7 @@ export default function App() {
           );
         },
       });
-      setPriceRefreshVersion((version) => version + 1);
-      mutate("/api/user");
+      await Promise.all([revalidatePrices(), revalidateUser()]);
       const summary = summarizeRefreshResults(results, apiRemaining);
       toast({ title: `${summary.fetched}/${summary.total} assets updated`, description: `${summary.apiCalls ?? "Unknown"} API calls used • ${summary.remainingCalls} app-tracked calls remaining` });
       if (results.length < symbols.length) {
@@ -247,8 +250,9 @@ export default function App() {
     return matchesType && (showDeleted || !asset.isDeleted);
   });
 
-  if (!router.isReady || (!demoMode && (sessionStatus === "loading" || isLoading))) return <LoadingState />;
-  if (!demoMode && userError) return <WelcomeState error />;
+  if (!router.isReady || (!demoMode && sessionStatus === "loading")) return <LoadingState />;
+  if (!demoMode && userError && !user) return <WelcomeState error onRetry={() => { void revalidateUser(); }} retrying={portfolio.user.isValidating} />;
+  if (!demoMode && sessionStatus === "authenticated" && (!user || (!prices && !pricesError))) return <LoadingState />;
   if (!demoMode && !user) return <WelcomeState />;
 
   return (
@@ -263,6 +267,7 @@ export default function App() {
         <p className="block mt-3 max-w-2xl text-muted-foreground">Track stocks, crypto, metals, property and cash without losing sight of your overall allocation.</p>
       </header>
 
+      {!demoMode && pricesError && <Alert className="mb-6"><AlertTitle>Saved holdings loaded</AlertTitle><AlertDescription>{prices ? "Cached prices could not be refreshed. Showing the last available cached values." : "Cached prices are temporarily unavailable. Showing saved holding values."}</AlertDescription></Alert>}
       <PortfolioOverview assets={assets} />
       <section aria-labelledby="assets-title">
         <div className="flex items-center justify-between gap-4 mb-3"><h2 id="assets-title" className="text-2xl font-bold">Assets</h2><AssetControls handleUpdateValues={handleReloadPrices} onAdd={handleAddAsset} onSearch={handleSearchAndAddAsset} apiRemaining={apiRemaining} demoMode={demoMode} refreshDisabled={isPriceRefreshing} /></div>
@@ -270,7 +275,7 @@ export default function App() {
         {filteredAssets.length ? <AssetList assets={filteredAssets} sortBy={sortBy} handleUnDeleteAsset={(id) => setDeleted(id, false)} handleEditAsset={handleEditAsset} handleUpdatePrice={handleUpdatePrice} priceRefreshDisabled={isPriceRefreshing || (!demoMode && apiRemaining <= 0)} refreshingSymbol={refreshingSymbol} /> : <EmptyState hasFilters={selectedTypes.length > 0 || (!showDeleted && assets.some((asset) => asset.isDeleted))} onAdd={() => handleAddAsset()} onClear={() => { setSelectedTypes([]); setShowDeleted(true); }} />}
       </section>
 
-      {!demoMode && <Prices refreshDisabled={isPriceRefreshing} onRefreshStart={beginPriceRefresh} onRefreshEnd={endPriceRefresh} />}
+      {!demoMode && <Prices user={user} prices={prices} error={pricesError} onRevalidate={revalidatePrices} refreshDisabled={isPriceRefreshing} onRefreshStart={beginPriceRefresh} onRefreshEnd={endPriceRefresh} />}
       {!demoMode && <div className="hidden"><ApiLimitBadge onRemainingChange={setApiRemaining} /></div>}
       <Footer><TotalValue value={assets.filter((asset) => !asset.isDeleted).reduce((sum, asset) => sum + (asset.value || 0), 0)} /></Footer>
       <AssetDialog open={dialogOpen} onOpenChange={setDialogOpen} initialValues={editingAsset} onSubmit={handleFormSubmit} onDelete={(id) => setDeleted(id, true)} onCancel={() => { setDialogOpen(false); setEditingAsset(null); }} isSaving={isSaving} />
@@ -282,8 +287,8 @@ function LoadingState() {
   return <main className="min-h-screen grid place-items-center" aria-busy="true"><div className="text-center"><div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-muted border-t-primary" /><p className="block mt-4 text-muted-foreground">Loading your portfolio…</p></div></main>;
 }
 
-function WelcomeState({ error = false }: { error?: boolean }) {
-  return <main className="min-h-screen grid place-items-center px-6 py-16 bg-slate-50"><div className="w-full max-w-2xl text-center"><WalletCards className="mx-auto h-12 w-12" /><p className="block mt-6 text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Multi-asset portfolio tracking</p><h1 className="mt-3 text-5xl font-extrabold tracking-tight">All your assets.<br />One honest overview.</h1><p className="block mx-auto mt-5 max-w-xl text-lg text-muted-foreground">Explore the product instantly with anonymized, local data. No account, database or market-data quota required.</p>{error && <Alert variant="destructive" className="mt-6 text-left"><AlertCircle className="h-4 w-4" /><AlertTitle>Live account unavailable</AlertTitle><AlertDescription>The server data could not be loaded. The independent demo is still ready.</AlertDescription></Alert>}<div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3"><Button asChild size="lg" className="w-full sm:w-auto"><Link href="/?demo=true">Open interactive demo <ArrowRight className="ml-2 h-4 w-4" /></Link></Button><Login /></div></div></main>;
+function WelcomeState({ error = false, onRetry, retrying = false }: { error?: boolean; onRetry?: () => void; retrying?: boolean }) {
+  return <main className="min-h-screen grid place-items-center px-6 py-16 bg-slate-50"><div className="w-full max-w-2xl text-center"><WalletCards className="mx-auto h-12 w-12" /><p className="block mt-6 text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Multi-asset portfolio tracking</p><h1 className="mt-3 text-5xl font-extrabold tracking-tight">All your assets.<br />One honest overview.</h1><p className="block mx-auto mt-5 max-w-xl text-lg text-muted-foreground">Explore the product instantly with anonymized, local data. No account, database or market-data quota required.</p>{error && <Alert variant="destructive" className="mt-6 text-left"><AlertCircle className="h-4 w-4" /><AlertTitle>Live account unavailable</AlertTitle><AlertDescription>The server data could not be loaded. The independent demo is still ready.{onRetry && <Button className="mt-3" variant="outline" onClick={onRetry} disabled={retrying}>Retry portfolio</Button>}</AlertDescription></Alert>}<div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3"><Button asChild size="lg" className="w-full sm:w-auto"><Link href="/?demo=true">Open interactive demo <ArrowRight className="ml-2 h-4 w-4" /></Link></Button><Login /></div></div></main>;
 }
 
 function EmptyState({ hasFilters, onAdd, onClear }: { hasFilters: boolean; onAdd: () => void; onClear: () => void }) {

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import useSWR from "swr";
+import type { CachedPrice, UserData } from "@/hooks/use-portfolio-data";
 import { useSession } from "next-auth/react";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,15 +10,6 @@ import ApiLimitBadge from "@/components/ApiLimitBadge";
 import { refreshOneSymbol } from "@/lib/refresh-http";
 import { AlertCircle, Clock, RotateCcw } from "lucide-react";
 import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "@/lib/price-refresh";
-
-interface Price {
-  symbol: string;
-  value: number;
-  currency: string;
-  source: string;
-  recordedAt?: string;
-  timestamp?: string;
-}
 
 interface FetchResultItem {
   symbol: string;
@@ -34,12 +25,18 @@ interface FetchSummary {
   results: FetchResultItem[];
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+interface PricesProps {
+  user?: UserData;
+  prices?: CachedPrice[];
+  error?: unknown;
+  onRevalidate: () => Promise<CachedPrice[] | undefined>;
+  refreshDisabled?: boolean;
+  onRefreshStart?: () => boolean;
+  onRefreshEnd?: () => void;
+}
 
-export default function Prices({ refreshDisabled = false, onRefreshStart, onRefreshEnd }: { refreshDisabled?: boolean; onRefreshStart?: () => boolean; onRefreshEnd?: () => void }) {
+export default function Prices({ user, prices, error, onRevalidate: mutate, refreshDisabled = false, onRefreshStart, onRefreshEnd }: PricesProps) {
   const { data: session } = useSession();
-  const { data: prices, mutate, error } = useSWR<Price[]>("/api/prices", fetcher);
-  const { data: user } = useSWR(session ? "/api/user" : null, fetcher);
   const [saving, setSaving] = useState(false);
   const refreshInFlight = useRef(false);
   const { toast } = useToast();

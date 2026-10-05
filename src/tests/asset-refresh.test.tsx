@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "@/pages/index";
+import { SWRConfig } from "swr";
 
 const mocks = vi.hoisted(() => ({
-  toast: vi.fn(), mutate: vi.fn(),
+  toast: vi.fn(),
   user: { _id: "user-1", email: "user@example.com", assets: [
     { _id: "stock-id", name: "Apple holding", abb: "AAPL", type: "stocks", quantity: 2, baseValue: 10, value: 20, isDeleted: false },
     { _id: "crypto-id", name: "Bitcoin holding", abb: "BTC", type: "crypto", quantity: 1, baseValue: 10, value: 10, isDeleted: false },
   ] },
   prices: [] as unknown[],
 }));
-vi.mock("swr", () => ({ default: (key: string) => ({ data: key === "/api/user" ? mocks.user : mocks.prices, mutate: () => mocks.mutate(key), isLoading: false }), mutate: (...args: unknown[]) => mocks.mutate(...args) }));
 vi.mock("next-auth/react", () => ({ useSession: () => ({ data: { user: { email: "user@example.com" } }, status: "authenticated" }) }));
 vi.mock("next/router", () => ({ useRouter: () => ({ isReady: true, query: {} }) }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
@@ -27,9 +27,9 @@ function setupPendingRefresh() {
   let resolve!: (response: Response) => void;
   const fetcher = vi.fn((url: string) => url === "/api/prices/fetch"
     ? new Promise<Response>((done) => { resolve = done; })
-    : Promise.resolve(Response.json([])));
+    : Promise.resolve(Response.json(url === "/api/user" ? mocks.user : mocks.prices)));
   vi.stubGlobal("fetch", fetcher);
-  render(<App />);
+  render(<SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false, revalidateOnFocus: false }}><App /></SWRConfig>);
   return { fetcher, resolve: (response: Response) => resolve(response), refreshCalls: () => fetcher.mock.calls.filter(([url]) => url === "/api/prices/fetch") };
 }
 
@@ -55,10 +55,10 @@ it("revalidates cached prices and shows the new holding value after an individua
   const { fetcher, resolve } = setupPendingRefresh();
   const stock = await screen.findByRole("button", { name: "Update price for Apple holding" });
   fireEvent.click(stock);
-  fetcher.mockImplementation((url: string) => Promise.resolve(Response.json(url === "/api/prices" ? [{ symbol: "AAPL", value: 42, recordedAt: "2026-10-02T12:00:00Z" }] : [])));
+  fetcher.mockImplementation((url: string) => Promise.resolve(Response.json(url === "/api/prices" ? [{ symbol: "AAPL", value: 42, recordedAt: "2026-10-02T12:00:00Z" }] : mocks.user)));
   await act(async () => resolve(Response.json({ apiCalls: 1, remainingCalls: 24, results: [{ symbol: "AAPL", ok: true }] })));
-  await waitFor(() => expect(mocks.mutate).toHaveBeenCalledWith("/api/prices"));
-  expect(mocks.mutate).toHaveBeenCalledWith("/api/user");
+  await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url === "/api/prices")).toHaveLength(2));
+  expect(fetcher.mock.calls.filter(([url]) => url === "/api/user")).toHaveLength(2);
   expect(screen.getByText("84 €")).toBeInTheDocument();
 });
 
@@ -66,7 +66,7 @@ it.each([200, 429])("revalidates allowance and releases the icon after HTTP %s f
   const counterChanged = vi.fn();
   window.addEventListener("api-counter-changed", counterChanged);
   try {
-    const { resolve, refreshCalls } = setupPendingRefresh();
+    const { fetcher, resolve, refreshCalls } = setupPendingRefresh();
     const crypto = await screen.findByRole("button", { name: "Update price for Bitcoin holding" });
     fireEvent.click(crypto);
     expect(refreshCalls()[0]).toEqual(["/api/prices/fetch", expect.objectContaining({ body: JSON.stringify({ symbol: "BTC" }) })]);
@@ -75,7 +75,8 @@ it.each([200, 429])("revalidates allowance and releases the icon after HTTP %s f
       : { apiCalls: 1, remainingCalls: 7, results: [{ symbol: "BTC", ok: false, reason: "No valid price available for this symbol." }] }, { status })));
     expect(counterChanged).toHaveBeenCalledTimes(1);
     expect(crypto).toHaveAttribute("aria-busy", "false");
-    expect(mocks.mutate).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/prices")).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/user")).toHaveLength(1);
     expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "BTC could not be updated", variant: "destructive" }));
     if (status === 429) {
       expect(crypto).toBeDisabled();
@@ -105,12 +106,12 @@ it.each(["Refresh prices", "Fetch latest prices"])("prevents same-tick asset cli
 
 it.each(["XAUUSD", "XAGUSD"])("submits the exact %s symbol from its individual metal card", async (symbol) => {
   mocks.user.assets = [{ ...originalAssets[0], _id: "metal-id", name: "Metal holding", abb: symbol, type: "metals" }];
-  const { resolve, refreshCalls } = setupPendingRefresh();
+  const { fetcher, resolve, refreshCalls } = setupPendingRefresh();
   fireEvent.click(await screen.findByRole("button", { name: "Update price for Metal holding" }));
   expect(refreshCalls()[0]).toEqual(["/api/prices/fetch", expect.objectContaining({ body: JSON.stringify({ symbol }) })]);
   await act(async () => resolve(Response.json({ apiCalls: 1, remainingCalls: 24, results: [{ symbol, ok: true }] })));
   expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: `${symbol} updated` }));
-  expect(mocks.mutate).toHaveBeenCalledWith("/api/prices");
+  expect(fetcher.mock.calls.filter(([url]) => url === "/api/prices")).toHaveLength(2);
 });
 
 it.each(["Refresh prices", "Fetch latest prices"])("includes gold/silver but not platinum in the %s batch", async (name) => {
