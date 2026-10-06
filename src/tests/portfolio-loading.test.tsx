@@ -6,12 +6,13 @@ import App from "@/pages/index";
 const mocks = vi.hoisted(() => ({
   session: { data: { user: { email: "first@example.com" } }, status: "authenticated" },
   query: {} as Record<string, string>,
+  routerReady: true,
   toast: vi.fn(),
   put: vi.fn(), post: vi.fn(),
 }));
 vi.mock("axios", () => ({ default: { create: () => ({ put: mocks.put, post: mocks.post }) } }));
 vi.mock("next-auth/react", () => ({ useSession: () => mocks.session }));
-vi.mock("next/router", () => ({ useRouter: () => ({ isReady: true, query: mocks.query }) }));
+vi.mock("next/router", () => ({ useRouter: () => ({ isReady: mocks.routerReady, query: mocks.query }) }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
 vi.mock("@/components/Login", () => ({ default: () => null }));
 vi.mock("@/components/ApiLimitBadge", () => ({ default: () => null }));
@@ -21,8 +22,8 @@ const holding = { _id: "holding-1", name: "Apple holding", abb: "AAPL", type: "s
 const user = { _id: "first", email: "first@example.com", assets: [holding] };
 const prices = [{ symbol: "AAPL", value: 42, recordedAt: "2026-10-02T12:00:00Z" }];
 
-beforeEach(() => { vi.clearAllMocks(); mocks.query = {}; mocks.session = { data: { user: { email: "first@example.com" } }, status: "authenticated" }; window.localStorage.clear(); });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.routerReady = true; mocks.query = {}; mocks.session = { data: { user: { email: "first@example.com" } }, status: "authenticated" }; window.localStorage.clear(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 function setup() {
   const pending: Record<string, ((response: Response) => void)[]> = {};
@@ -103,6 +104,10 @@ it("only shows the genuine empty state after both reads settle", async () => {
 it("does not fetch server data before authentication", async () => {
   mocks.session.status = "loading";
   const { rerender, fetcher, resolve } = setup();
+  expect(screen.getByRole("heading", { name: "Asset Tracker" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Loading portfolio" })).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByRole("status")).toHaveTextContent("Loading your portfolio…");
+  expect(screen.getByRole("button", { name: "Add asset" })).toBeDisabled();
   expect(fetcher).not.toHaveBeenCalled();
   mocks.session.status = "unauthenticated";
   rerender();
@@ -222,6 +227,8 @@ it("resets local edits and dialogs when switching a ready account", async () => 
   rerender();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.queryByText("Apple holding")).not.toBeInTheDocument();
+  expect(screen.queryByText("20 €")).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Loading portfolio" })).toBeInTheDocument();
   await resolve("/api/user", { ...user, email: "second@example.com", assets: [] });
   await resolve("/api/prices", []);
   expect(screen.getByText("Your portfolio is empty")).toBeInTheDocument();
@@ -260,6 +267,8 @@ it("lets a failed holdings read be retried without waiting for cached prices", a
   const { fetcher, resolve } = setup();
   await resolve("/api/user", { error: "Unavailable" }, 503);
   expect(screen.getByText("Live account unavailable")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Asset Tracker" })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Loading portfolio" })).not.toBeInTheDocument();
   expect(screen.queryByText("Loading your portfolio…")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Retry portfolio" }));
   await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url === "/api/user")).toHaveLength(2));
@@ -291,10 +300,37 @@ it("starts holdings and cached prices concurrently and keeps the portfolio loade
   await resolve("/api/user", user);
   expect(screen.getByText("Loading your portfolio…")).toBeInTheDocument();
   expect(screen.queryByText("Your portfolio is empty")).not.toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "Assets" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Asset Tracker" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Assets" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Loading portfolio" })).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByRole("button", { name: "Add asset" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Refresh prices" })).toBeDisabled();
+  expect(screen.queryByText("Apple holding")).not.toBeInTheDocument();
+  expect(screen.queryByText(/0 €/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   await resolve("/api/prices", prices);
   expect(await screen.findByText("Apple holding")).toBeInTheDocument();
   expect(screen.getAllByText("84 €").length).toBeGreaterThan(0);
   expect(screen.queryByText("Loading your portfolio…")).not.toBeInTheDocument();
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/user", "/api/prices"]);
+});
+
+it("renders the safe shell before the router is ready without starting reads", () => {
+  mocks.routerReady = false;
+  const { fetcher } = setup();
+  expect(screen.getByRole("heading", { name: "Asset Tracker" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Loading portfolio" })).toBeInTheDocument();
+  expect(screen.queryByText("Your portfolio is empty")).not.toBeInTheDocument();
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("removes skeletons immediately on quick success without advancing any loading timer", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const { resolve, fetcher } = setup();
+  expect(screen.getByRole("region", { name: "Loading portfolio" })).toBeInTheDocument();
+  await resolve("/api/user", user);
+  await resolve("/api/prices", prices);
+  expect(screen.queryByRole("region", { name: "Loading portfolio" })).not.toBeInTheDocument();
+  expect(screen.getByText("Apple holding")).toBeInTheDocument();
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });

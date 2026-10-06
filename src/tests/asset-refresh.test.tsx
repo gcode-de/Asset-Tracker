@@ -117,7 +117,9 @@ it.each(["XAUUSD", "XAGUSD"])("submits the exact %s symbol from its individual m
 it.each(["Refresh prices", "Fetch latest prices"])("includes gold/silver but not platinum in the %s batch", async (name) => {
   mocks.user.assets = ["XAUUSD", "XAGUSD", "XPTUSD"].map((abb) => ({ ...originalAssets[0], _id: abb, name: abb, abb, type: "metals" }));
   const { resolve, refreshCalls } = setupPendingRefresh();
-  fireEvent.click(await screen.findByRole("button", { name }));
+  // The early shell exposes the batch button, but it is inert until ready.
+  await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name }));
   expect(refreshCalls()).toHaveLength(1);
   expect(refreshCalls()[0]).toEqual(["/api/prices/fetch", expect.objectContaining({ body: JSON.stringify({ symbol: "XAUUSD" }) })]);
   await act(async () => resolve(Response.json({ apiCalls: 2, remainingCalls: 23, results: [{ symbol: "XAUUSD", ok: true }] })));

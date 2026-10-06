@@ -2,6 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Indeterminate activity, not a percentage or a minimum loading duration. */
+.portfolio-loading-bar {
+  animation: portfolio-loading 2.5s ease-in-out infinite;
+}
+
+@keyframes portfolio-loading {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portfolio-loading-bar,
+  .portfolio-skeleton .animate-pulse {
+    animation: none;
+  }
+}
+
 /* general styling */
 html {
   scroll-behavior: smooth;

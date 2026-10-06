@@ -9,13 +9,14 @@ import Prices from "@/components/Prices";
 import ApiLimitBadge from "@/components/ApiLimitBadge";
 import { refreshOneSymbol } from "@/lib/refresh-http";
 import PortfolioOverview from "@/components/PortfolioOverview";
+import PortfolioLoading from "@/components/PortfolioLoading";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { AssetType } from "@/components/Asset";
 import { demoAssets, readDemoAssets, writeDemoAssets, DEMO_STORAGE_KEY } from "@/lib/demo";
 import { usePortfolioData, type CachedPrice } from "@/hooks/use-portfolio-data";
 import axios from "axios";
-import { useEffect, useState, useRef, FormEvent, useMemo } from "react";
+import { useEffect, useState, useRef, FormEvent, useMemo, type ReactNode } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
@@ -253,19 +254,17 @@ function PortfolioApp() {
   if (!router.isReady || (!demoMode && sessionStatus === "loading")) return <LoadingState />;
   if (!demoMode && userError && !user) return <WelcomeState error onRetry={() => { void revalidateUser(); }} retrying={portfolio.user.isValidating} />;
   if (!demoMode && sessionStatus === "authenticated" && (!user || (!prices && !pricesError))) return <LoadingState />;
+  if (demoMode && !localAssets) return <LoadingState />;
   if (!demoMode && !user) return <WelcomeState />;
 
   return (
     <main id="wrapper">
-      <header className="mb-8">
+      <AppHeader>
         <div className="flex items-center justify-between gap-4 mb-5">
           {demoMode ? <div className="flex items-center gap-2 text-sm font-medium text-emerald-700"><Database className="h-4 w-4" />Anonymous local demo</div> : <Login />}
           {demoMode && <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => { window.localStorage.removeItem(DEMO_STORAGE_KEY); setAssets(demoAssets); }}><RotateCcw className="h-4 w-4 mr-2" />Reset demo</Button><Button asChild variant="outline" size="sm"><Link href="/">Exit demo</Link></Button></div>}
         </div>
-        <p className="block text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Personal wealth, one clear view</p>
-        <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mt-2">Asset Tracker</h1>
-        <p className="block mt-3 max-w-2xl text-muted-foreground">Track stocks, crypto, metals, property and cash without losing sight of your overall allocation.</p>
-      </header>
+      </AppHeader>
 
       {!demoMode && pricesError && <Alert className="mb-6"><AlertTitle>Saved holdings loaded</AlertTitle><AlertDescription>{prices ? "Cached prices could not be refreshed. Showing the last available cached values." : "Cached prices are temporarily unavailable. Showing saved holding values."}</AlertDescription></Alert>}
       <PortfolioOverview assets={assets} />
@@ -284,11 +283,36 @@ function PortfolioApp() {
 }
 
 function LoadingState() {
-  return <main className="min-h-screen grid place-items-center" aria-busy="true"><div className="text-center"><div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-muted border-t-primary" /><p className="block mt-4 text-muted-foreground">Loading your portfolio…</p></div></main>;
+  return <main id="wrapper"><AppHeader><div className="h-9 mb-5" aria-hidden="true" /></AppHeader><PortfolioLoading /></main>;
+}
+
+function AppHeader({ children }: { children: ReactNode }) {
+  return (
+    <header className="mb-8">
+      {children}
+      <p className="block text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Personal wealth, one clear view</p>
+      <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mt-2">Asset Tracker</h1>
+      <p className="block mt-3 max-w-2xl text-muted-foreground">Track stocks, crypto, metals, property and cash without losing sight of your overall allocation.</p>
+    </header>
+  );
 }
 
 function WelcomeState({ error = false, onRetry, retrying = false }: { error?: boolean; onRetry?: () => void; retrying?: boolean }) {
-  return <main className="min-h-screen grid place-items-center px-6 py-16 bg-slate-50"><div className="w-full max-w-2xl text-center"><WalletCards className="mx-auto h-12 w-12" /><p className="block mt-6 text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Multi-asset portfolio tracking</p><h1 className="mt-3 text-5xl font-extrabold tracking-tight">All your assets.<br />One honest overview.</h1><p className="block mx-auto mt-5 max-w-xl text-lg text-muted-foreground">Explore the product instantly with anonymized, local data. No account, database or market-data quota required.</p>{error && <Alert variant="destructive" className="mt-6 text-left"><AlertCircle className="h-4 w-4" /><AlertTitle>Live account unavailable</AlertTitle><AlertDescription>The server data could not be loaded. The independent demo is still ready.{onRetry && <Button className="mt-3" variant="outline" onClick={onRetry} disabled={retrying}>Retry portfolio</Button>}</AlertDescription></Alert>}<div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3"><Button asChild size="lg" className="w-full sm:w-auto"><Link href="/?demo=true">Open interactive demo <ArrowRight className="ml-2 h-4 w-4" /></Link></Button><Login /></div></div></main>;
+  if (error) return (
+    <main id="wrapper">
+      <AppHeader><div className="h-9 mb-5" aria-hidden="true" /></AppHeader>
+      <Alert variant="destructive" className="mb-6">
+        <AlertCircle className="h-4 w-4" />
+        <AlertTitle>Live account unavailable</AlertTitle>
+        <AlertDescription>The saved holdings could not be loaded. Retry to prepare your portfolio; no values are shown until it is ready.</AlertDescription>
+      </Alert>
+      <div className="flex flex-wrap gap-3">
+        {onRetry && <Button variant="outline" onClick={onRetry} disabled={retrying} aria-busy={retrying}>Retry portfolio</Button>}
+        <Button asChild variant="ghost"><Link href="/?demo=true">Open interactive demo <ArrowRight className="ml-2 h-4 w-4" /></Link></Button>
+      </div>
+    </main>
+  );
+  return <main className="min-h-screen grid place-items-center px-6 py-16 bg-slate-50"><div className="w-full max-w-2xl text-center"><WalletCards className="mx-auto h-12 w-12" /><p className="block mt-6 text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Multi-asset portfolio tracking</p><h1 className="mt-3 text-5xl font-extrabold tracking-tight">All your assets.<br />One honest overview.</h1><p className="block mx-auto mt-5 max-w-xl text-lg text-muted-foreground">Explore the product instantly with anonymized, local data. No account, database or market-data quota required.</p><div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3"><Button asChild size="lg" className="w-full sm:w-auto"><Link href="/?demo=true">Open interactive demo <ArrowRight className="ml-2 h-4 w-4" /></Link></Button><Login /></div></div></main>;
 }
 
 function EmptyState({ hasFilters, onAdd, onClear }: { hasFilters: boolean; onAdd: () => void; onClear: () => void }) {
