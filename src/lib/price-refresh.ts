@@ -23,7 +23,7 @@ export interface PriceRefreshResponse {
   results?: Array<{ symbol: string; ok: boolean; reason?: string }>;
 }
 
-export function summarizeRefreshResults(results: SymbolRefreshResult[], fallbackRemaining: number) {
+export function summarizeRefreshResults(results: SymbolRefreshResult[], fallbackRemaining: number | null) {
   return {
     fetched: results.filter((result) => result.ok).length,
     total: results.length,

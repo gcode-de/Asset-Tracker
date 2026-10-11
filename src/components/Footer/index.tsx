@@ -12,7 +12,7 @@ export default function Footer({ children }: FooterProps) {
         <span id="total-value">{children}</span>
       </div>
       <Separator className="my-3" />
-      <p>This app keeps track of your assets and gets real time price data from separate APIs.</p>
+      <p>Estimated values combine saved/manual valuations and cached market quotes, with mixed ages. This is not a real-time feed.</p>
     </footer>
   );
 }

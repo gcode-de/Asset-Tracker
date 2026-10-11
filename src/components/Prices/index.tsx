@@ -1,3 +1,4 @@
+import { formatTime } from "@/lib/portfolio-ux";
 import { useState, useMemo, useEffect, useRef } from "react";
 import type { CachedPrice, UserData } from "@/hooks/use-portfolio-data";
 import { useSession } from "next-auth/react";
@@ -21,7 +22,7 @@ interface FetchSummary {
   fetched: number;
   total: number;
   apiCalls: number | null;
-  remainingCalls: number;
+  remainingCalls: number | null;
   results: FetchResultItem[];
 }
 
@@ -31,17 +32,22 @@ interface PricesProps {
   error?: unknown;
   onRevalidate: () => Promise<CachedPrice[] | undefined>;
   refreshDisabled?: boolean;
+  apiRemaining?: number | null;
   onRefreshStart?: () => boolean;
   onRefreshEnd?: () => void;
+  onBatchRefresh?: () => Promise<void>;
+  refreshStatus?: string;
+  onRemainingChange?: (remaining: number) => void;
 }
 
-export default function Prices({ user, prices, error, onRevalidate: mutate, refreshDisabled = false, onRefreshStart, onRefreshEnd }: PricesProps) {
+export default function Prices({ user, prices, error, onRevalidate: mutate, refreshDisabled = false, apiRemaining, onRefreshStart, onRefreshEnd, onBatchRefresh, refreshStatus, onRemainingChange }: PricesProps) {
   const { data: session } = useSession();
   const [saving, setSaving] = useState(false);
   const refreshInFlight = useRef(false);
   const { toast } = useToast();
   const [timeSinceUpdate, setTimeSinceUpdate] = useState<string>("Never");
-  const [remaining, setRemaining] = useState<number>(25);
+  const [localRemaining, setRemaining] = useState<number | null>(null);
+  const remaining = apiRemaining === undefined ? localRemaining : apiRemaining;
   const [lastSummary, setLastSummary] = useState<FetchSummary | null>(null);
   const [showDetails, setShowDetails] = useState<boolean>(false);
   const [refreshProgress, setRefreshProgress] = useState<{ completed: number; total: number; symbol?: string } | null>(null);
@@ -70,7 +76,8 @@ export default function Prices({ user, prices, error, onRevalidate: mutate, refr
 
   const lastFetchTime = useMemo(() => {
     if (!filteredPrices || filteredPrices.length === 0) return null;
-    const times = filteredPrices.map((p) => new Date(p.recordedAt || p.timestamp || 0));
+    const times = filteredPrices.filter(p => p.recordedAt && Number.isFinite(new Date(p.recordedAt).getTime())).map(p => new Date(p.recordedAt!));
+    if (!times.length) return null;
     const max = new Date(
       Math.max.apply(
         null,
@@ -113,6 +120,7 @@ export default function Prices({ user, prices, error, onRevalidate: mutate, refr
   const fetchOnePrice = refreshOneSymbol;
 
   const onFetchLatest = async () => {
+    if (onBatchRefresh) { await onBatchRefresh(); return; }
     if (!session) {
       toast({ title: "Sign in to fetch prices" });
       return;
@@ -171,13 +179,13 @@ export default function Prices({ user, prices, error, onRevalidate: mutate, refr
         {!prices && !error && <div className="mb-4 space-y-2" aria-busy="true" aria-label="Loading prices"><div className="h-4 w-1/3 animate-pulse rounded bg-muted" /><div className="h-10 animate-pulse rounded bg-muted" /></div>}
         <div className="mb-6 space-y-4">
           {/* API Limit Badge */}
-          <ApiLimitBadge onRemainingChange={setRemaining} />
+          <ApiLimitBadge onRemainingChange={onRemainingChange ?? setRemaining} />
 
           {/* Last Updated Info */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <div className="flex items-center gap-2 mb-2">
               <Clock className="h-4 w-4 text-blue-600" />
-              <span className="font-semibold text-sm text-blue-900">Last Updated</span>
+              <span className="font-semibold text-sm text-blue-900">Most recently saved quote (other holdings may be older)</span>
             </div>
             <div className="text-sm text-blue-800">
               {lastFetchTime ? (
@@ -186,12 +194,12 @@ export default function Prices({ user, prices, error, onRevalidate: mutate, refr
                   <div className="text-xs opacity-75">{lastFetchTime.toLocaleString("de-DE")}</div>
                 </>
               ) : (
-                <div className="italic">No prices fetched yet</div>
+                <div className="italic">{filteredPrices.length ? "Save time unknown" : "No prices fetched yet"}</div>
               )}
             </div>
           </div>
         </div>
-        <Button onClick={onFetchLatest} disabled={!session || saving || refreshDisabled || remaining <= 0} className="w-full">
+        <Button onClick={onFetchLatest} disabled={!session || saving || refreshDisabled || (remaining !== null && remaining <= 0)} className="w-full">
           {saving ? (
             refreshProgress ? (
               <span className="flex items-center gap-2">
@@ -208,6 +216,7 @@ export default function Prices({ user, prices, error, onRevalidate: mutate, refr
             "Fetch latest prices"
           )}
         </Button>
+        {refreshStatus && <p role="status" aria-live="polite" className="block mt-3 text-sm">{refreshStatus}</p>}
         <Separator className="my-4" />
         {lastSummary && (
           <div className="mb-4 p-3 border rounded-md bg-muted/20">
@@ -263,9 +272,9 @@ export default function Prices({ user, prices, error, onRevalidate: mutate, refr
                 <TableRow key={p.symbol}>
                   <TableCell>{p.symbol}</TableCell>
                   <TableCell className="text-right">{Number(p.value).toLocaleString("de-DE")}</TableCell>
-                  <TableCell>{p.currency}</TableCell>
+                  <TableCell>{p.currency}{["XAU", "XAG", "XAUUSD", "XAGUSD"].includes(p.symbol.toUpperCase()) ? "/troy oz" : ""}</TableCell>
                   <TableCell>{p.source}</TableCell>
-                  <TableCell>{new Date(p.recordedAt || p.timestamp || 0).toLocaleString()}</TableCell>
+                  <TableCell>Saved: {formatTime(p.recordedAt)}<span className="block text-xs">Quote: {formatTime(p.timestamp)}</span></TableCell>
                 </TableRow>
               ))}
             </TableBody>

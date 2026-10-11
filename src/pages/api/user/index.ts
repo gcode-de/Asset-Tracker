@@ -1,3 +1,4 @@
+import { parseCostBasis } from "@/lib/portfolio-ux";
 import dbConnect from "@/db/connect";
 import User, { IAsset } from "@/db/models/User";
 import { cleanAssets } from "../../../../defaultAssets";
@@ -53,7 +54,8 @@ export default async function handler(request: NextApiRequest, response: NextApi
           abb: request.body.abb ?? "",
           value: request.body.value ?? 0,
           baseValue: request.body.baseValue ?? 0,
-          costBasis: request.body.costBasis ?? request.body.value ?? 0,
+          costBasis: parseCostBasis(request.body.costBasis),
+          createdAt: new Date(),
           isDeleted: false,
         } as IAsset;
 
@@ -75,7 +77,10 @@ export default async function handler(request: NextApiRequest, response: NextApi
 
         switch (action) {
           case "update": {
-            user.assets = upsertEmbeddedAsset(user.assets, request.body.id, request.body);
+            const update = { ...request.body };
+            if ("costBasis" in update) update.costBasis = parseCostBasis(update.costBasis);
+            delete update.createdAt;
+            user.assets = upsertEmbeddedAsset(user.assets, request.body.id, update);
             user.markModified("assets");
             await user.save();
             return response.status(200).json({ message: "Asset updated" });
@@ -93,7 +98,7 @@ export default async function handler(request: NextApiRequest, response: NextApi
             return response.status(200).json({ message: "Asset soft-undeleted" });
           }
           case "RESET_ASSETS": {
-            user.assets = cleanAssets;
+            user.assets = cleanAssets.map(({ createdAt, ...asset }) => ({ ...asset, ...(createdAt ? { createdAt: new Date(createdAt) } : {}) }));
             user.markModified("assets");
             await user.save();
             return response.status(200).json({ message: "Assets reset successfully" });

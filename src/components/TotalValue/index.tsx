@@ -15,7 +15,7 @@ export default function TotalValue({ value }: TotalValueProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Total Worth</CardTitle>
+        <CardTitle>Overall estimated value · EUR</CardTitle>
       </CardHeader>
       <CardContent className="text-xl font-semibold">{formatCurrency(value)}</CardContent>
     </Card>

@@ -13,8 +13,8 @@ describe("PortfolioOverview", () => {
   it("excludes deleted assets and shows value, performance and allocation", () => {
     render(<PortfolioOverview assets={assets} />);
 
-    expect(screen.getByText("10.000 €")).toBeInTheDocument();
-    expect(screen.getByText(/\+1.000 € \(\+11.1%\)/)).toBeInTheDocument();
+    expect(screen.getByText("10.000,00 €")).toBeInTheDocument();
+    expect(screen.getByText(/\+1.000,00 € \(\+11.1%\)/)).toBeInTheDocument();
     expect(screen.getByText("60%")).toBeInTheDocument();
     expect(screen.getByText("40%")).toBeInTheDocument();
     expect(screen.queryByText("19.000 €")).not.toBeInTheDocument();

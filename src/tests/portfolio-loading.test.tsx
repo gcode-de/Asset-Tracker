@@ -18,6 +18,34 @@ vi.mock("@/components/Login", () => ({ default: () => null }));
 vi.mock("@/components/ApiLimitBadge", () => ({ default: () => null }));
 vi.mock("@/components/AssetSearchDialog", () => ({ default: () => null }));
 
+it("makes stale Undo callbacks inert after account switch with a shared numeric ID", async () => {
+  const { resolve, rerender } = setup();
+  await resolve("/api/user", { ...user, assets: [{ ...holding, _id: undefined, id: 0 }] });
+  await resolve("/api/prices", []);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Apple holding" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete Apple holding" }));
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Asset moved to deleted" })));
+  const undo = mocks.toast.mock.calls.find(([t]) => t.title === "Asset moved to deleted")![0].action;
+  mocks.session.data.user.email = "second@example.com";
+  rerender();
+  await resolve("/api/user", { ...user, email: "second@example.com", assets: [{ ...holding, _id: undefined, id: 0, isDeleted: true }] });
+  await resolve("/api/prices", []);
+  await act(async () => undo.props.onClick());
+  expect(mocks.put).toHaveBeenCalledTimes(1);
+});
+
+it("clears cached provenance only when the unit price is overridden", async () => {
+  const { resolve } = setup();
+  await resolve("/api/user", user);
+  await resolve("/api/prices", [{ ...prices[0], timestamp: "2026-10-01T12:00:00Z" }]);
+  fireEvent.click(screen.getByRole("button", { name: "Edit Apple holding" }));
+  fireEvent.change(screen.getByLabelText("Unit Price *"), { target: { value: "55" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(screen.getByRole("article")).toHaveTextContent("Manual valuation");
+  expect(screen.getByRole("article")).not.toHaveTextContent("Cached quote");
+});
+
 const holding = { _id: "holding-1", name: "Apple holding", abb: "AAPL", type: "stocks", quantity: 2, baseValue: 10, value: 20, isDeleted: false };
 const user = { _id: "first", email: "first@example.com", assets: [holding] };
 const prices = [{ symbol: "AAPL", value: 42, recordedAt: "2026-10-02T12:00:00Z" }];
@@ -56,7 +84,7 @@ it("keeps the ready portfolio and labels the retained cache when price revalidat
   act(() => { void revalidate("/api/prices"); });
   expect(screen.queryByText("Loading your portfolio…")).not.toBeInTheDocument();
   await resolve("/api/prices", { error: "Unavailable" }, 503);
-  expect(screen.getAllByText("84 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/84,00\s*€/).length).toBeGreaterThan(0);
   expect(screen.getByText("Cached prices could not be refreshed. Showing the last available cached values.")).toBeInTheDocument();
 });
 
@@ -66,7 +94,7 @@ it("waits for holdings when cached prices finish first", async () => {
   expect(screen.getByText("Loading your portfolio…")).toBeInTheDocument();
   expect(screen.queryByText("Your portfolio is empty")).not.toBeInTheDocument();
   await resolve("/api/user", user);
-  expect(screen.getAllByText("84 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/84,00\s*€/).length).toBeGreaterThan(0);
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
@@ -80,7 +108,7 @@ it.each(["user-first", "prices-first"])("shows saved holdings on a cached-price 
   }
   expect(screen.getByText("Apple holding")).toBeInTheDocument();
   expect(screen.getByText("Cached prices are temporarily unavailable. Showing saved holding values.")).toBeInTheDocument();
-  expect(screen.getAllByText("20 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/20,00\s*€/).length).toBeGreaterThan(0);
   expect(screen.queryByText("Loading your portfolio…")).not.toBeInTheDocument();
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/user", "/api/prices"]);
 });
@@ -131,7 +159,8 @@ it("preserves edited quantity while stale holdings and new cached prices settle"
   await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
   await resolve("/api/user", user);
   await resolve("/api/prices", [{ ...prices[0], value: 50 }]);
-  expect(screen.getAllByText("150 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/150,00\s*€/).length).toBeGreaterThan(0);
+  expect(screen.getByRole("article")).toHaveTextContent("Cached quote");
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/user", "/api/prices", "/api/user", "/api/prices"]);
 
   // A read started after the successful edit is authoritative, not a frozen snapshot.
@@ -141,14 +170,14 @@ it("preserves edited quantity while stale holdings and new cached prices settle"
     { ...holding, _id: "holding-2", name: "Added elsewhere", abb: "MSFT", quantity: 1 },
   ] });
   expect(screen.getByText("Added elsewhere")).toBeInTheDocument();
-  expect(screen.getAllByText("150 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/150,00\s*€/).length).toBeGreaterThan(0);
 
   act(() => { void revalidate("/api/user"); });
   await resolve("/api/user", { ...user, assets: [{ ...holding, quantity: 4, name: "Updated elsewhere" }] });
   expect(screen.queryByText("Added elsewhere")).not.toBeInTheDocument();
   expect(screen.queryByText("Apple holding")).not.toBeInTheDocument();
   expect(screen.getByText("Updated elsewhere")).toBeInTheDocument();
-  expect(screen.getAllByText("200 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/200,00\s*€/).length).toBeGreaterThan(0);
 });
 
 it("keeps authoritative changes received while an edit save is pending", async () => {
@@ -164,7 +193,7 @@ it("keeps authoritative changes received while an edit save is pending", async (
   await resolve("/api/user", { ...user, assets: [holding, { ...holding, _id: "holding-2", name: "Concurrent holding", abb: "MSFT" }] });
   await act(async () => { finishSave(); });
   expect(screen.getByText("Concurrent holding")).toBeInTheDocument();
-  expect(screen.getAllByText("126 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/126,00\s*€/).length).toBeGreaterThan(0);
 });
 
 it("keeps a created holding through an older read but accepts its later authoritative removal", async () => {
@@ -227,7 +256,7 @@ it("resets local edits and dialogs when switching a ready account", async () => 
   rerender();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.queryByText("Apple holding")).not.toBeInTheDocument();
-  expect(screen.queryByText("20 €")).not.toBeInTheDocument();
+  expect(screen.queryByText(/20,00\s*€/)).not.toBeInTheDocument();
   expect(screen.getByRole("region", { name: "Loading portfolio" })).toBeInTheDocument();
   await resolve("/api/user", { ...user, email: "second@example.com", assets: [] });
   await resolve("/api/prices", []);
@@ -259,7 +288,7 @@ it("preserves an edited holding price instead of replacing it with the existing 
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(mocks.put).toHaveBeenCalled());
   await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument());
-  expect(screen.getAllByText("150 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/150,00\s*€/).length).toBeGreaterThan(0);
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/user", "/api/prices"]);
 });
 
@@ -310,7 +339,7 @@ it("starts holdings and cached prices concurrently and keeps the portfolio loade
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   await resolve("/api/prices", prices);
   expect(await screen.findByText("Apple holding")).toBeInTheDocument();
-  expect(screen.getAllByText("84 €").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/84,00\s*€/).length).toBeGreaterThan(0);
   expect(screen.queryByText("Loading your portfolio…")).not.toBeInTheDocument();
   expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/user", "/api/prices"]);
 });

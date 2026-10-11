@@ -5,8 +5,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AssetType } from "@/components/Asset";
-import { AlertCircle } from "lucide-react";
 import { preciousMetalSymbol } from "@/lib/price-refresh";
+import { refreshGuidance } from "@/lib/portfolio-ux";
 
 interface FormProps {
   onFormSubmit?: (e: FormEvent<HTMLFormElement>) => void;
@@ -49,9 +49,6 @@ export default function Form({ onFormSubmit, resetForm, formId = "asset-form", h
     setAbb(e.target.value);
   };
 
-  // Check if asset type needs a symbol for automatic price fetching
-  const needsSymbolForPrices = ["metals", "cash", "real_estate"].includes(selectedType);
-  const showSymbolWarning = needsSymbolForPrices && !abb?.trim();
   const isMetal = preciousMetalSymbol({ type: selectedType, abb }) !== undefined;
 
   return (
@@ -76,21 +73,13 @@ export default function Form({ onFormSubmit, resetForm, formId = "asset-form", h
 
         <div className="grid gap-2">
           <Label htmlFor="assetNameField">Name *</Label>
-          <Input autoFocus required id="assetNameField" name="name" defaultValue={initialValues?.name || ""} placeholder="Bitcoin, Gold..." />
+          <Input required id="assetNameField" name="name" defaultValue={initialValues?.name || ""} placeholder="Bitcoin, Gold..." />
         </div>
 
         <div className="grid gap-2">
           <Label htmlFor="abbField">Symbol / Ticker</Label>
-          <Input id="abbField" name="abb" value={abb} onChange={handleAbbChange} placeholder="BTC, AAPL, 4GLD.DE..." aria-describedby={showSymbolWarning ? "symbol-warning" : undefined} />
-          {showSymbolWarning && (
-            <div id="symbol-warning" className="flex items-start gap-2 p-2 text-xs bg-amber-50 border border-amber-200 rounded" role="status">
-              <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
-              <div className="text-amber-900">
-                <span className="font-semibold">No automatic price updates:</span> This asset type requires a valid symbol (e.g., stock ticker or
-                crypto code) to fetch prices automatically.
-              </div>
-            </div>
-          )}
+          <Input id="abbField" name="abb" value={abb} onChange={handleAbbChange} placeholder="BTC, AAPL, XAU..." aria-describedby="symbol-guidance" />
+          <p id="symbol-guidance" className="block text-sm text-muted-foreground" role="status">{refreshGuidance(selectedType, abb)}</p>
         </div>
 
         {isMetal && (

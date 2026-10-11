@@ -1,3 +1,6 @@
+import { parseCostBasis, refreshableCopy } from "@/lib/portfolio-ux";
+import { readPortfolioView, portfolioViewQuery, type PortfolioView } from "@/lib/portfolio-view";
+import { ToastAction } from "@/components/ui/toast";
 import AssetList from "@/components/AssetList";
 import AssetControls from "@/components/AssetControls";
 import Filters from "@/components/Filters";
@@ -6,7 +9,6 @@ import TotalValue from "@/components/TotalValue";
 import Login from "@/components/Login";
 import AssetDialog from "@/components/AssetDialog";
 import Prices from "@/components/Prices";
-import ApiLimitBadge from "@/components/ApiLimitBadge";
 import { refreshOneSymbol } from "@/lib/refresh-http";
 import PortfolioOverview from "@/components/PortfolioOverview";
 import PortfolioLoading from "@/components/PortfolioLoading";
@@ -21,6 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import Link from "next/link";
+import Head from "next/head";
 import { AlertCircle, ArrowRight, Database, RotateCcw, WalletCards } from "lucide-react";
 import { collectRefreshableSymbols, refreshSymbolsSequentially, summarizeRefreshResults } from "@/lib/price-refresh";
 
@@ -29,7 +32,7 @@ function mergeCachedPrices(holdings: AssetType[], prices?: CachedPrice[]) {
   const priceMap = new Map(prices.map((price) => [price.symbol.toUpperCase(), price]));
   return holdings.map((asset) => {
     const price = priceMap.get(String(asset.abb || "").toUpperCase());
-    return price ? { ...asset, baseValue: price.value, value: (asset.quantity || 0) * price.value, priceUpdatedAt: price.recordedAt || price.timestamp } : asset;
+    return price ? { ...asset, baseValue: price.value, value: (asset.quantity || 0) * price.value, priceUpdatedAt: price.recordedAt, quoteTimestamp: price.timestamp, valuationSource: "cached" as const } : asset;
   });
 }
 
@@ -39,21 +42,37 @@ export default function App() {
   const demoMode = router.isReady && router.query.demo === "true";
   // Remount all local holdings, dialogs and pending refresh state on identity changes.
   const identity = demoMode ? "demo" : status === "authenticated" ? session?.user?.email : status;
-  return <PortfolioApp key={identity} />;
+  return <><Head><title>{demoMode ? "Asset Tracker — Demo" : "Asset Tracker — Portfolio"}</title><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" /></Head><a className="skip-link" href="#assets-title">Skip to assets</a><PortfolioApp key={identity} identity={identity} /></>;
 }
 
-function PortfolioApp() {
+function PortfolioApp({ identity }: { identity: string | null | undefined }) {
   const router = useRouter();
   const demoMode = router.isReady && router.query.demo === "true";
   const { toast } = useToast();
   const { data: session, status: sessionStatus } = useSession();
+  const originIdentity = useRef(identity);
+  const mounted = useRef(true);
+  const undoToast = useRef<{ dismiss: () => void } | undefined>(undefined);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; undoToast.current?.dismiss(); }; }, []);
   const [localAssets, setLocalAssets] = useState<{ assets: AssetType[]; priceSnapshot?: CachedPrice[] } | null>(null);
+  const dialogOrigin = useRef<HTMLElement | null>(null);
+  const captureDialogOrigin = () => { dialogOrigin.current = document.activeElement as HTMLElement; };
+  const restoreDialogOrigin = () => {
+    const origin = dialogOrigin.current;
+    const target = origin?.isConnected ? origin : origin?.id ? document.getElementById(origin.id) : null;
+    (target ?? document.getElementById("assets-title"))?.focus();
+  };
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<Partial<AssetType> | null>(null);
-  const [showDeleted, setShowDeleted] = useState(false);
-  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-  const [sortBy, setSortBy] = useState<"value" | "name" | "date">("value");
-  const [apiRemaining, setApiRemaining] = useState(25);
+  const viewState = readPortfolioView(router.query);
+  const { deleted: showDeleted, types: selectedTypes, sort: sortBy, view } = viewState;
+  const changeView = (update: Partial<PortfolioView>) => { void router.push({ pathname: router.pathname, query: portfolioViewQuery(router.query, { ...viewState, ...update }) }, undefined, { shallow: true, scroll: false }); };
+  const setShowDeleted = (deleted: boolean) => changeView({ deleted });
+  const setSelectedTypes = (update: string[] | ((current: string[]) => string[])) => changeView({ types: typeof update === "function" ? update(selectedTypes) : update });
+  const setSortBy = (sort: PortfolioView["sort"]) => changeView({ sort });
+  const setView = (view: PortfolioView["view"]) => changeView({ view });
+  const [apiRemaining, setApiRemaining] = useState<number | null>(null);
+  const [refreshStatus, setRefreshStatus] = useState("Ready to update market prices. Manual valuations are unchanged.");
   const [isSaving, setIsSaving] = useState(false);
   const priceRefreshInFlight = useRef(false);
   const [isPriceRefreshing, setIsPriceRefreshing] = useState(false);
@@ -106,9 +125,15 @@ function PortfolioApp() {
   async function handleFormSubmit(event: FormEvent<HTMLFormElement>, initialValues?: Partial<AssetType> | null) {
     event.preventDefault();
     setIsSaving(true);
-    const formProps = Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string | number>;
-    ["quantity", "value", "baseValue", "costBasis"].forEach((key) => { formProps[key] = Number(formProps[key] || 0); });
+    const formProps = Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string | number | null>;
+    formProps.costBasis = parseCostBasis(formProps.costBasis);
+    ["quantity", "value", "baseValue"].forEach((key) => { formProps[key] = Number(formProps[key] || 0); });
     formProps.value = Number(formProps.quantity) * Number(formProps.baseValue);
+    if (initialValues && Number(formProps.baseValue) !== initialValues.baseValue) {
+      formProps.valuationSource = "manual";
+      formProps.quoteTimestamp = null;
+      formProps.priceUpdatedAt = null;
+    }
     const id = initialValues?._id ?? initialValues?.id ?? formProps.id;
     const isEdit = id !== undefined && id !== null && id !== "";
 
@@ -118,7 +143,7 @@ function PortfolioApp() {
           updateDemoAssets((current) => current.map((asset) => (asset._id === id || asset.id === id ? { ...asset, ...formProps } as AssetType : asset)));
           toast({ title: "Demo asset updated" });
         } else {
-          const created = { ...formProps, id: `demo-${Date.now()}`, isDeleted: false } as unknown as AssetType;
+          const created = { ...formProps, id: `demo-${Date.now()}`, createdAt: new Date().toISOString(), isDeleted: false } as unknown as AssetType;
           updateDemoAssets((current) => [created, ...current]);
           toast({ title: `${created.name} added to the demo` });
         }
@@ -141,20 +166,28 @@ function PortfolioApp() {
   }
 
   async function setDeleted(assetId: string | number, isDeleted: boolean) {
+    const isOrigin = () => mounted.current && originIdentity.current === (demoMode ? "demo" : session?.user?.email);
+    if (!isOrigin()) return false;
     try {
       if (demoMode) {
         updateDemoAssets((current) => current.map((asset) => (asset._id === assetId || asset.id === assetId ? { ...asset, isDeleted } : asset)));
       } else {
         await apiClient.put(`/user?action=${isDeleted ? "softDelete" : "softUndelete"}`, { id: assetId });
+        if (!isOrigin()) return false;
         setAssets((current) => current.map((asset) => (asset._id === assetId || asset.id === assetId ? { ...asset, isDeleted } : asset)));
       }
-      toast({ title: isDeleted ? "Asset moved to deleted" : "Asset restored" });
+      if (!isOrigin()) return false;
+      undoToast.current = toast({ title: isDeleted ? "Asset moved to deleted" : "Asset restored", action: isDeleted ? <ToastAction altText="Restore deleted asset" onClick={() => { void setDeleted(assetId, false); }}>Undo</ToastAction> : undefined });
+      return true;
     } catch (error) {
+      if (!isOrigin()) return false;
       toast({ title: isDeleted ? "Delete failed" : "Restore failed", description: error instanceof Error ? error.message : "Please try again.", variant: "destructive" });
+      return false;
     }
   }
 
   function handleEditAsset(id: string | number) {
+    captureDialogOrigin();
     setEditingAsset(assets.find((asset) => asset._id === id || asset.id === id) || null);
     setDialogOpen(true);
   }
@@ -165,6 +198,7 @@ function PortfolioApp() {
     priceRefreshInFlight.current = true;
     setIsPriceRefreshing(true);
     setRefreshingSymbol(symbol ?? null);
+    setRefreshStatus(symbol ? `Updating ${symbol} (0/1)` : "Preparing market-price update…");
     return true;
   }
 
@@ -187,6 +221,7 @@ function PortfolioApp() {
     try {
       const result = await refreshOneSymbol(symbol);
       if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
+      setRefreshStatus(`${result.symbol}: ${result.ok ? "updated" : "failed"} (1/1) • ${result.apiCalls ?? "Unknown"} calls used • ${result.remainingCalls ?? "Unknown"} remaining. Try another update when available.`);
       if (!result.ok) throw new Error(result.reason || "No quote available");
       await Promise.all([revalidatePrices(), revalidateUser()]);
       toast({ title: `${symbol} updated`, description: `${result.apiCalls} API calls used` });
@@ -198,6 +233,7 @@ function PortfolioApp() {
   }
 
   function handleAddAsset(prefillType?: string) {
+    captureDialogOrigin();
     setEditingAsset(prefillType ? { type: prefillType } : null);
     setDialogOpen(true);
   }
@@ -214,16 +250,19 @@ function PortfolioApp() {
     }
     const symbols = collectRefreshableSymbols(assets);
     if (symbols.length === 0) {
-      toast({ title: "No refreshable assets", description: "Stocks, ETFs and crypto with a symbol can be updated automatically." });
+      toast({ title: "No refreshable assets", description: refreshableCopy });
       return;
     }
 
     if (!beginPriceRefresh()) return;
     try {
+      let completed = 0;
       const results = await refreshSymbolsSequentially({
         symbols,
-        refreshSymbol: refreshOneSymbol,
-        onResult: async (result) => {
+        refreshSymbol: (symbol) => { setRefreshingSymbol(symbol); setRefreshStatus(`Updating ${symbol} (${completed}/${symbols.length})`); return refreshOneSymbol(symbol); },
+        onResult: async (result, index, total) => {
+          completed = index + 1;
+          setRefreshStatus(`Updating ${result.symbol} (${index + 1}/${total}) • ${result.ok ? "updated" : "failed"}`);
           if (typeof result.remainingCalls === "number") setApiRemaining(result.remainingCalls);
           if (result.ok) await revalidatePrices();
           toast(
@@ -235,7 +274,8 @@ function PortfolioApp() {
       });
       await Promise.all([revalidatePrices(), revalidateUser()]);
       const summary = summarizeRefreshResults(results, apiRemaining);
-      toast({ title: `${summary.fetched}/${summary.total} assets updated`, description: `${summary.apiCalls ?? "Unknown"} API calls used • ${summary.remainingCalls} app-tracked calls remaining` });
+      setRefreshStatus(`${results.length}/${symbols.length} completed • ${summary.fetched} updated • ${results.filter(r => !r.ok).length} failed • ${symbols.length - results.length} skipped • ${summary.apiCalls ?? "Unknown"} calls used • ${summary.remainingCalls ?? "Unknown"} remaining. ${results.some(r => r.terminal) ? "Wait for provider cooldown or check market data settings before retrying." : "Ready for another update."}`);
+      toast({ title: `${summary.fetched}/${summary.total} assets updated`, description: `${summary.apiCalls ?? "Unknown"} API calls used • ${summary.remainingCalls ?? "Unknown"} app-tracked calls remaining` });
       if (results.length < symbols.length) {
         toast({ title: "Refresh stopped", description: `${symbols.length - results.length} asset${symbols.length - results.length === 1 ? "" : "s"} skipped because the provider is unavailable right now.`, variant: "destructive" });
       }
@@ -259,25 +299,27 @@ function PortfolioApp() {
 
   return (
     <main id="wrapper">
-      <AppHeader>
-        <div className="flex items-center justify-between gap-4 mb-5">
+      <AppHeader compact>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           {demoMode ? <div className="flex items-center gap-2 text-sm font-medium text-emerald-700"><Database className="h-4 w-4" />Anonymous local demo</div> : <Login />}
           {demoMode && <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => { window.localStorage.removeItem(DEMO_STORAGE_KEY); setAssets(demoAssets); }}><RotateCcw className="h-4 w-4 mr-2" />Reset demo</Button><Button asChild variant="outline" size="sm"><Link href="/">Exit demo</Link></Button></div>}
         </div>
       </AppHeader>
 
       {!demoMode && pricesError && <Alert className="mb-6"><AlertTitle>Saved holdings loaded</AlertTitle><AlertDescription>{prices ? "Cached prices could not be refreshed. Showing the last available cached values." : "Cached prices are temporarily unavailable. Showing saved holding values."}</AlertDescription></Alert>}
-      <PortfolioOverview assets={assets} />
+      <PortfolioOverview assets={assets} demoMode={demoMode} />
       <section aria-labelledby="assets-title">
-        <div className="flex items-center justify-between gap-4 mb-3"><h2 id="assets-title" className="text-2xl font-bold">Assets</h2><AssetControls handleUpdateValues={handleReloadPrices} onAdd={handleAddAsset} onSearch={handleSearchAndAddAsset} apiRemaining={apiRemaining} demoMode={demoMode} refreshDisabled={isPriceRefreshing} /></div>
-        <div className="mb-6"><Filters showDeleted={showDeleted} onToggleDeleted={setShowDeleted} selectedTypes={selectedTypes} onToggleType={(type) => setSelectedTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} sortBy={sortBy} onSortChange={setSortBy} /></div>
-        {filteredAssets.length ? <AssetList assets={filteredAssets} sortBy={sortBy} handleUnDeleteAsset={(id) => setDeleted(id, false)} handleEditAsset={handleEditAsset} handleUpdatePrice={handleUpdatePrice} priceRefreshDisabled={isPriceRefreshing || (!demoMode && apiRemaining <= 0)} refreshingSymbol={refreshingSymbol} /> : <EmptyState hasFilters={selectedTypes.length > 0 || (!showDeleted && assets.some((asset) => asset.isDeleted))} onAdd={() => handleAddAsset()} onClear={() => { setSelectedTypes([]); setShowDeleted(true); }} />}
+        <div className="flex items-center justify-between gap-4 mb-3"><h2 tabIndex={-1} id="assets-title" className="text-2xl font-bold">Assets</h2><AssetControls handleUpdateValues={handleReloadPrices} onAdd={handleAddAsset} onSearch={handleSearchAndAddAsset} apiRemaining={apiRemaining} demoMode={demoMode} refreshDisabled={isPriceRefreshing} /></div>
+        <div className="mb-3 flex gap-2" aria-label="Portfolio view"><Button size="sm" variant={view === "list" ? "default" : "outline"} aria-pressed={view === "list"} onClick={() => setView("list")}>Compact list</Button><Button size="sm" variant={view === "cards" ? "default" : "outline"} aria-pressed={view === "cards"} onClick={() => setView("cards")}>Cards</Button></div>
+        {!demoMode && <p role="status" aria-live="polite" className="block mb-3 text-sm">{refreshStatus}</p>}
+        <p className="block mb-3 text-sm">{filteredAssets.length} of {assets.filter(a => showDeleted || !a.isDeleted).length} holdings • Filtered value: {filteredAssets.reduce((sum, a) => sum + (a.value || 0), 0).toLocaleString("de-DE", { style: "currency", currency: "EUR" })}{showDeleted ? " (includes deleted holdings)" : ""}. Active portfolio total above.</p>
+        <div className="mb-3"><Filters counts={Object.fromEntries(["cash", "crypto", "metals", "stocks", "real_estate"].map(type => [type, assets.filter(a => a.type === type && (showDeleted || !a.isDeleted)).length]))} onClear={() => setSelectedTypes([])} showDeleted={showDeleted} onToggleDeleted={setShowDeleted} selectedTypes={selectedTypes} onToggleType={(type) => setSelectedTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} sortBy={sortBy} onSortChange={setSortBy} /></div>
+        {filteredAssets.length ? <AssetList assets={filteredAssets} view={view} demoMode={demoMode} sortBy={sortBy} handleUnDeleteAsset={(id) => setDeleted(id, false)} handleEditAsset={handleEditAsset} handleUpdatePrice={handleUpdatePrice} priceRefreshDisabled={isPriceRefreshing || (!demoMode && apiRemaining !== null && apiRemaining <= 0)} refreshingSymbol={refreshingSymbol} /> : <EmptyState hasFilters={selectedTypes.length > 0 || (!showDeleted && assets.some((asset) => asset.isDeleted))} onAdd={() => handleAddAsset()} onClear={() => setSelectedTypes([])} />}
       </section>
 
-      {!demoMode && <Prices user={user} prices={prices} error={pricesError} onRevalidate={revalidatePrices} refreshDisabled={isPriceRefreshing} onRefreshStart={beginPriceRefresh} onRefreshEnd={endPriceRefresh} />}
-      {!demoMode && <div className="hidden"><ApiLimitBadge onRemainingChange={setApiRemaining} /></div>}
+      {!demoMode && <Prices apiRemaining={apiRemaining} user={user} prices={prices} error={pricesError} onRevalidate={revalidatePrices} refreshDisabled={isPriceRefreshing} onRefreshStart={beginPriceRefresh} onRefreshEnd={endPriceRefresh} onBatchRefresh={handleReloadPrices} refreshStatus={refreshStatus} onRemainingChange={setApiRemaining} />}
       <Footer><TotalValue value={assets.filter((asset) => !asset.isDeleted).reduce((sum, asset) => sum + (asset.value || 0), 0)} /></Footer>
-      <AssetDialog open={dialogOpen} onOpenChange={setDialogOpen} initialValues={editingAsset} onSubmit={handleFormSubmit} onDelete={(id) => setDeleted(id, true)} onCancel={() => { setDialogOpen(false); setEditingAsset(null); }} isSaving={isSaving} />
+      <AssetDialog restoreFocus={restoreDialogOrigin} key={`${dialogOpen}-${editingAsset?._id ?? editingAsset?.id ?? "new"}`} open={dialogOpen} onOpenChange={setDialogOpen} initialValues={editingAsset} onSubmit={handleFormSubmit} onDelete={(id) => setDeleted(id, true)} onCancel={() => { setDialogOpen(false); setEditingAsset(null); }} isSaving={isSaving} />
     </main>
   );
 }
@@ -286,9 +328,9 @@ function LoadingState() {
   return <main id="wrapper"><AppHeader><div className="h-9 mb-5" aria-hidden="true" /></AppHeader><PortfolioLoading /></main>;
 }
 
-function AppHeader({ children }: { children: ReactNode }) {
+function AppHeader({ children, compact = false }: { children: ReactNode; compact?: boolean }) {
   return (
-    <header className="mb-8">
+    <header className={compact ? "mb-4 compact-header" : "mb-8"}>
       {children}
       <p className="block text-sm font-semibold uppercase tracking-[0.2em] text-muted-foreground">Personal wealth, one clear view</p>
       <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight mt-2">Asset Tracker</h1>
@@ -316,5 +358,5 @@ function WelcomeState({ error = false, onRetry, retrying = false }: { error?: bo
 }
 
 function EmptyState({ hasFilters, onAdd, onClear }: { hasFilters: boolean; onAdd: () => void; onClear: () => void }) {
-  return <div className="rounded-xl border border-dashed p-10 text-center mb-8"><WalletCards className="mx-auto h-9 w-9 text-muted-foreground" /><h3 className="mt-4 font-semibold">{hasFilters ? "No assets match these filters" : "Your portfolio is empty"}</h3><p className="block mt-2 text-sm text-muted-foreground">{hasFilters ? "Clear the filters to see the complete portfolio." : "Add your first holding to start tracking its value."}</p><Button className="mt-5" variant={hasFilters ? "outline" : "default"} onClick={hasFilters ? onClear : onAdd}>{hasFilters ? "Clear filters" : "Add first asset"}</Button></div>;
+  return <div className="rounded-xl border border-dashed p-10 text-center mb-8"><WalletCards className="mx-auto h-9 w-9 text-muted-foreground" /><h3 className="mt-4 font-semibold">{hasFilters ? "No assets match these filters" : "Your portfolio is empty"}</h3><p className="block mt-2 text-sm text-muted-foreground">{hasFilters ? "Clear the filters to see the complete portfolio." : "Add your first holding to start tracking its value."}</p><Button className="mt-5" variant={hasFilters ? "outline" : "default"} onClick={hasFilters ? onClear : onAdd}>{hasFilters ? "Clear category filters" : "Add first asset"}</Button></div>;
 }

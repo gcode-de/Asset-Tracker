@@ -9,13 +9,15 @@ const colors: Record<string, string> = {
   real_estate: "bg-violet-500",
 };
 
-const currency = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+import { currency } from "@/lib/portfolio-ux";
 
-export default function PortfolioOverview({ assets }: { assets: AssetType[] }) {
+export default function PortfolioOverview({ assets, demoMode = false }: { assets: AssetType[]; demoMode?: boolean }) {
   const active = assets.filter((asset) => !asset.isDeleted);
+  const cached = active.filter((asset) => asset.valuationSource === "cached").length;
   const total = active.reduce((sum, asset) => sum + (asset.value || 0), 0);
-  const costBasis = active.reduce((sum, asset) => sum + (asset.costBasis ?? asset.value ?? 0), 0);
-  const gain = total - costBasis;
+  const known = active.filter((asset) => typeof asset.costBasis === "number" && Number.isFinite(asset.costBasis) && asset.costBasis >= 0);
+  const costBasis = known.reduce((sum, asset) => sum + asset.costBasis!, 0);
+  const gain = known.reduce((sum, asset) => sum + (asset.value || 0), 0) - costBasis;
   const gainPercent = costBasis ? (gain / costBasis) * 100 : 0;
   const allocation = Object.entries(
     active.reduce<Record<string, number>>((groups, asset) => {
@@ -29,14 +31,16 @@ export default function PortfolioOverview({ assets }: { assets: AssetType[] }) {
       <Card className="bg-slate-950 text-white border-slate-950">
         <CardHeader>
           <CardTitle id="portfolio-overview-title" className="text-sm font-medium text-slate-300">
-            Portfolio value
+            Estimated portfolio value · EUR
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="block text-3xl font-bold tracking-tight">{currency.format(total)}</p>
+          <details className="mt-2"><summary className="text-sm cursor-pointer">Valuation and performance context</summary><p className="block mt-2 text-sm text-slate-300">{demoMode ? "Fixed demo snapshot · local edits only, no live prices" : `${cached} cached · ${active.length - cached} manual/saved valuations · mixed ages, not live`}. Overall active portfolio, independent of filters.</p></details>
           <p className={`mt-2 text-sm ${gain >= 0 ? "text-emerald-300" : "text-red-300"}`}>
-            {gain >= 0 ? "+" : ""}{currency.format(gain)} ({gainPercent >= 0 ? "+" : ""}{gainPercent.toFixed(1)}%) vs. cost basis
+            {known.length ? <>{gain >= 0 ? "+" : ""}{currency.format(gain)} {costBasis ? `(${gainPercent >= 0 ? "+" : ""}${gainPercent.toFixed(1)}%)` : "(percentage unavailable for zero basis)"} vs. cost basis</> : "Performance unavailable — add cost basis"}
           </p>
+          {known.length > 0 && <p className="block mt-1 text-sm text-slate-300">{known.length} of {active.length} holdings with known cost basis. Not a time-period return.</p>}
         </CardContent>
       </Card>
       <Card>

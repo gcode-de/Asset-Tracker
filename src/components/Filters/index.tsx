@@ -12,6 +12,8 @@ const typeOptions = [
 ];
 
 interface FiltersProps {
+  counts?: Record<string, number>;
+  onClear?: () => void;
   showDeleted: boolean;
   onToggleDeleted: (checked: boolean) => void;
   selectedTypes?: string[];
@@ -20,17 +22,18 @@ interface FiltersProps {
   onSortChange?: (value: "value" | "name" | "date") => void;
 }
 
-export default function Filters({ showDeleted, onToggleDeleted, selectedTypes = [], onToggleType, sortBy = "date", onSortChange }: FiltersProps) {
+export default function Filters({ counts, onClear, showDeleted, onToggleDeleted, selectedTypes = [], onToggleType, sortBy = "date", onSortChange }: FiltersProps) {
   return (
     <div id="assetFilters" className="flex items-center gap-1 flex-wrap" aria-label="Filter and sort assets">
       {typeOptions.map((opt) => {
         const active = selectedTypes.includes(opt.value);
         return (
           <Button key={opt.value} variant={active ? "default" : "outline"} size="sm" onClick={() => onToggleType?.(opt.value)} aria-pressed={active}>
-            {opt.label}
+            {opt.label}{counts ? ` (${counts[opt.value] ?? 0})` : ""}
           </Button>
         );
       })}
+      {selectedTypes.length > 0 && <Button variant="ghost" size="sm" onClick={onClear}>Clear category filters</Button>}
       <div className="flex items-center gap-2 ml-4">
         <Label htmlFor="sort-by" className="text-sm text-muted-foreground">
           Sort:
@@ -40,15 +43,15 @@ export default function Filters({ showDeleted, onToggleDeleted, selectedTypes = 
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="value">highest</SelectItem>
-            <SelectItem value="name">alphabetical</SelectItem>
-            <SelectItem value="date">newest</SelectItem>
+            <SelectItem value="value">Value: highest first</SelectItem>
+            <SelectItem value="name">Name: A–Z</SelectItem>
+            <SelectItem value="date">Created: newest first</SelectItem>
           </SelectContent>
         </Select>
       </div>
       <div className="flex items-center gap-2 md:ml-auto">
         <Switch id="show-deleted" checked={!!showDeleted} onCheckedChange={onToggleDeleted} />
-        <Label htmlFor="show-deleted">Show deleted</Label>
+        <Label htmlFor="show-deleted">Include deleted holdings</Label>
       </div>
     </div>
   );

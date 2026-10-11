@@ -9,12 +9,12 @@ interface AssetControlsProps {
   handleUpdateValues: () => void | Promise<void>;
   onAdd?: (type: string) => void;
   onSearch?: (symbol: string, name: string, assetClass?: string) => void;
-  apiRemaining?: number;
+  apiRemaining?: number | null;
   demoMode?: boolean;
   refreshDisabled?: boolean;
 }
 
-export default function AssetControls({ handleUpdateValues, onAdd, onSearch, apiRemaining = 25, demoMode = false, refreshDisabled = false }: AssetControlsProps) {
+export default function AssetControls({ handleUpdateValues, onAdd, onSearch, apiRemaining = null, demoMode = false, refreshDisabled = false }: AssetControlsProps) {
   const [updating, setUpdating] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -31,14 +31,14 @@ export default function AssetControls({ handleUpdateValues, onAdd, onSearch, api
     onSearch?.(symbol, name, assetClass);
   };
   return (
-    <div className="flex gap-2 justify-end w-full">
-      <Button variant="outline" size="icon" aria-label="Refresh prices" onClick={onReload} disabled={updating || refreshDisabled || (!demoMode && apiRemaining <= 0)}>
+    <div className="flex gap-2 justify-end flex-wrap">
+      <Button variant="outline" size="icon" aria-label="Refresh prices" onClick={onReload} disabled={updating || refreshDisabled || (!demoMode && apiRemaining !== null && apiRemaining <= 0)}>
         <RefreshCcw className={`h-4 w-4 ${updating ? "animate-spin" : ""}`} />
       </Button>
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button id="searchAssetButton" variant="outline" size="icon" aria-label="Search asset" onClick={() => setSearchOpen(true)}>
+            <Button id="searchAssetButton" variant="outline" size="icon" aria-label="Find and add asset" title="Find and add asset (provider search, not your holdings)" onClick={() => setSearchOpen(true)}>
               <Search className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
@@ -50,8 +50,8 @@ export default function AssetControls({ handleUpdateValues, onAdd, onSearch, api
             <span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button id="addAssetButton" size="icon" aria-label="Add asset">
-                    <Plus className="h-4 w-4" />
+                  <Button id="addAssetButton" size="sm" aria-label="Add asset">
+                    <Plus className="h-4 w-4" />Add asset
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">

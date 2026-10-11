@@ -1,5 +1,6 @@
 import Asset, { AssetType } from "@/components/Asset";
 import { useMemo } from "react";
+import { sortHoldings } from "@/lib/portfolio-view";
 
 interface AssetListProps {
   assets: AssetType[];
@@ -8,6 +9,8 @@ interface AssetListProps {
   handleUpdatePrice?: (symbol: string) => void;
   priceRefreshDisabled?: boolean;
   refreshingSymbol?: string | null;
+  view?: "list" | "cards";
+  demoMode?: boolean;
   sortBy?: "value" | "name" | "date";
 }
 
@@ -19,30 +22,17 @@ export default function AssetList({
   priceRefreshDisabled,
   refreshingSymbol,
   sortBy = "date",
+  view = "cards",
+  demoMode = false,
 }: AssetListProps) {
-  const sortedAssets = useMemo(() => {
-    const sorted = [...assets];
-    switch (sortBy) {
-      case "value":
-        return sorted.sort((a, b) => (b.value || 0) - (a.value || 0));
-      case "name":
-        return sorted.sort((a, b) => a.name.localeCompare(b.name));
-      case "date":
-        // Neueste zuerst - Assets mit höherer ID oder _id sind neuer
-        return sorted.sort((a, b) => {
-          const idA = Number(a._id || a.id || 0);
-          const idB = Number(b._id || b.id || 0);
-          return idB - idA;
-        });
-      default:
-        return sorted;
-    }
-  }, [assets, sortBy]);
+  const sortedAssets = useMemo(() => sortHoldings(assets, sortBy), [assets, sortBy]);
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+    <div className={view === "list" ? "space-y-2 mb-4" : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4"}>
       {sortedAssets.map((asset) => (
         <Asset
-          key={asset._id || asset.name}
+          key={asset._id ?? asset.id ?? asset.name}
+          compact={view === "list"}
+          demoMode={demoMode}
           asset={asset}
           handleUnDeleteAsset={handleUnDeleteAsset}
           handleEditAsset={handleEditAsset}

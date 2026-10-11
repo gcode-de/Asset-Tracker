@@ -9,8 +9,10 @@ describe("ApiKeySettings", () => {
     const listener = vi.fn();
     window.addEventListener("api-counter-changed", listener);
     render(<ApiKeySettings />);
-    fireEvent.click(screen.getByRole("button", { name: "Market data keys" }));
+    fireEvent.click(screen.getByRole("button", { name: "Market data settings" }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete ••••abcd" }));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete ••••abcd" }));
     await waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
     window.removeEventListener("api-counter-changed", listener);
   });
@@ -23,8 +25,8 @@ describe("ApiKeySettings", () => {
     window.addEventListener("api-counter-changed", counterChanged);
     render(<ApiKeySettings />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Market data keys" }));
-    await screen.findByText("Alpha Vantage keys");
+    fireEvent.click(screen.getByRole("button", { name: "Market data settings" }));
+    await screen.findByText("No private keys saved.");
     fireEvent.change(screen.getByLabelText("Alpha Vantage API key"), { target: { value: "private-alpha-key-abcd" } });
     fireEvent.click(screen.getByRole("button", { name: "Add key" }));
 

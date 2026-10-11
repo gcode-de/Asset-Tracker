@@ -14,6 +14,7 @@ export interface CachedPrice {
   source?: string;
   recordedAt?: string;
   timestamp?: string;
+  unit?: "troy_ounce";
 }
 
 async function readUser([url, email]: [string, string]): Promise<UserData> {

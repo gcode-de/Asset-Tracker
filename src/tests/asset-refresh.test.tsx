@@ -59,7 +59,7 @@ it("revalidates cached prices and shows the new holding value after an individua
   await act(async () => resolve(Response.json({ apiCalls: 1, remainingCalls: 24, results: [{ symbol: "AAPL", ok: true }] })));
   await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => url === "/api/prices")).toHaveLength(2));
   expect(fetcher.mock.calls.filter(([url]) => url === "/api/user")).toHaveLength(2);
-  expect(screen.getByText("84 €")).toBeInTheDocument();
+  expect(screen.getByText(/84,00\s*€/)).toBeInTheDocument();
 });
 
 it.each([200, 429])("revalidates allowance and releases the icon after HTTP %s failure", async (status) => {
@@ -81,6 +81,7 @@ it.each([200, 429])("revalidates allowance and releases the icon after HTTP %s f
     if (status === 429) {
       expect(crypto).toBeDisabled();
       expect(screen.getByRole("button", { name: "Refresh prices" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Fetch latest prices" })).toBeDisabled();
     } else {
       expect(crypto).toBeEnabled();
     }
@@ -97,10 +98,12 @@ it.each(["Refresh prices", "Fetch latest prices"])("prevents same-tick asset cli
   expect(refreshCalls()).toHaveLength(1);
   expect(stock).toBeDisabled();
   expect(screen.getByRole("button", { name: "Refresh prices" })).toBeDisabled();
+  expect(screen.getAllByText(/Updating AAPL/)).toHaveLength(2);
   // A terminal response ends this batch without spending quota on the next asset.
   await act(async () => resolve(Response.json({ apiCalls: 1, remainingCalls: 9, results: [{ symbol: "AAPL", ok: false, reason: "ALPHA_RATE_LIMIT_BURST: Provider requests paused." }] })));
   await waitFor(() => expect(stock).toBeEnabled());
   expect(refreshCalls()).toHaveLength(1);
+  expect(screen.getAllByText(/1\/2 completed.*1 failed.*1 skipped.*1 calls used.*9 remaining/)).toHaveLength(2);
   expect(screen.getByRole("button", { name: "Fetch latest prices" })).toBeEnabled();
 });
 
