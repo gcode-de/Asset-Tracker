@@ -56,7 +56,7 @@ test('reverted fields close cleanly', async ({ page }) => {
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
-test('200 percent text reflows without horizontal clipping', async ({ page }) => {
+test('200 percent text reflows without horizontal clipping', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/?demo=true');
   await page.addStyleTag({ content: 'html { font-size: 32px !important; }' });
@@ -64,7 +64,7 @@ test('200 percent text reflows without horizontal clipping', async ({ page }) =>
   await page.getByRole('button', { name: 'Edit Physical Gold', exact: true }).click();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeInViewport();
-  await page.screenshot({ path: '/home/hermes/.hermes/cache/scratch/asset-tracker-ux-implemented/text-200-dialog.png', fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath('text-200-dialog.png'), fullPage: false });
 });
 
 test('reduced motion disables dialog animation and focus reveals skip link', async ({ page }) => {

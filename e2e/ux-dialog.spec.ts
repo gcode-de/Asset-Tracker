@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
-test('compact mobile view exposes an identity, value and labelled add action', async ({ page }) => {
+test('compact mobile view exposes an identity, value and labelled add action', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/?demo=true');
   await expect(page.getByRole('button', { name: 'Compact list' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Add asset', exact: true })).toBeInViewport();
   await expect(page.getByRole('article').first().getByRole('heading')).toBeInViewport();
   await expect(page.getByRole('article').first().locator('.font-bold')).toBeInViewport();
-  await page.screenshot({ path: '/home/hermes/.hermes/cache/scratch/asset-tracker-ux-implemented/compact-mobile.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('compact-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cards', exact: true }).click();
   await expect(page.getByRole('article').first().locator('[style*="background-image"]')).toBeVisible();
 });
@@ -25,7 +25,7 @@ test('category reset preserves archive choice and history restores view', async 
   await expect(page.getByRole('button', { name: 'Real Estate (0)', exact: true })).toHaveAttribute('aria-pressed', 'false');
 });
 for (const width of [320, 390]) {
-  test(`gold dialog bounded and footer reachable at ${width}px`, async ({ page }) => {
+  test(`gold dialog bounded and footer reachable at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 667 });
     await page.goto('/?demo=true');
     await page.getByRole('button', { name: 'Edit Physical Gold', exact: true }).click();
@@ -39,6 +39,6 @@ for (const width of [320, 390]) {
     await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport();
     await page.getByLabel('Notes').focus();
     await expect(page.getByLabel('Notes')).toBeInViewport();
-    await page.screenshot({ path: `/home/hermes/.hermes/cache/scratch/asset-tracker-ux-implemented/dialog-${width}.png` });
+    await page.screenshot({ path: testInfo.outputPath(`dialog-${width}.png`) });
   });
 }
